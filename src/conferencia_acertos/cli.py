@@ -12,6 +12,7 @@ from conferencia_acertos.exporter import (
     generate_html_dashboard,
     generate_issues_package,
 )
+from conferencia_acertos.notebooklm_exporter import generate_notebooklm_bundle
 from conferencia_acertos.parser import parse_payload_file
 from conferencia_acertos.pdf_extractor import extract_pdf_data
 from conferencia_acertos.validator import validate_payload
@@ -85,10 +86,12 @@ def run_pipeline(
         rep_html = generate_html_dashboard(conn, report_path.with_suffix(".html"))
         issues_csv, issues_md = generate_issues_package(conn, report_path.parent)
         diff_md = generate_duplicity_diff_report(conn, report_path.parent / "diff_duplicidades.md")
+        nlm_prompts = generate_notebooklm_bundle(conn, report_path.parent / "notebooklm")
         print(f"\nProcessados {total_items} registro(s) de {len(files)} arquivo(s).")
         print(f"SQLite: {db_path}")
         print(f"Exports: {csv_conf}, {csv_div}, {xlsx}")
         print(f"Relatórios: {rep}, {rep_html}, {issues_csv}, {issues_md}, {diff_md}")
+        print(f"NotebookLM: {nlm_prompts} (+ sources/)")
     finally:
         conn.close()
 

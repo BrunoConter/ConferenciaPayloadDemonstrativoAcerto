@@ -20,6 +20,7 @@ db/*.db-wal
 reports/*.md
 reports/*.html
 reports/*.csv
+reports/notebooklm/
 !reports/.gitkeep
 
 # IDE / OS

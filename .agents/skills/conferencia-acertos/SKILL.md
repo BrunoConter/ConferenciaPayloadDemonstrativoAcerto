@@ -19,7 +19,8 @@ Use esta skill sempre que o usuário trouxer novos arquivos de payload em `data/
    - `db/acertos.db` (tabelas `payloads`, `acertos_json`, `acertos_pdf`, `validacoes` e views `vw_conferencia_completa`, `vw_divergencias` e `vw_duplicidades_lote`)
    - `data/pdf/<nome_payload>/` (subpasta por payload contendo `<nome_payload>.pdf`, `payload.json` e `relatorio_acuracia.md`)
    - `data/exports/conferencia_acertos.xlsx`, `conferencia_acertos.csv` e `divergencias_acertos.csv`
-   - `reports/relatorio_homologacao.md`
+   - `reports/relatorio_homologacao.md`, `relatorio_homologacao.html`, `issues_dev.csv`, `issues_dev.md` e `diff_duplicidades.md`
+   - `reports/notebooklm/` (fontes Markdown, datasets CSV e `PROMPTS_NOTEBOOKLM.md` prontos para NotebookLM)
 3. **Executar a suíte de testes unitários (`pytest`)**:
    ```bash
    uv run pytest -v
