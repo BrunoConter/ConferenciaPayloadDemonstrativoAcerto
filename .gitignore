@@ -19,6 +19,7 @@ db/*.db-journal
 db/*.db-wal
 reports/*.md
 reports/*.html
+reports/*.csv
 !reports/.gitkeep
 
 # IDE / OS
