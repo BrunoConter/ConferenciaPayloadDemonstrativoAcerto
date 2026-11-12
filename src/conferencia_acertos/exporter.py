@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import html
 import json
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ import pdfplumber
 from conferencia_acertos.parser import ParsedPayload
 from conferencia_acertos.pdf_extractor import PdfExtractedData
 from conferencia_acertos.validator import ValidationResult
+
+# ... (rest of the file remains same, just adding shutil import)
 
 
 def _fmt(val: object, default: str = "-") -> str:
@@ -31,6 +34,9 @@ def export_payload_bundle(
 ) -> Path | None:
     """Cria a subpasta data/pdf/<payload>/ com o PDF, payload.json e relatorio_acuracia.md."""
     bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copia arquivo de origem para auditoria
+    shutil.copy2(payload.caminho_origem, bundle_dir / payload.caminho_origem.name)
 
     pdf_saved_path: Path | None = None
     if payload.pdf_bytes and payload.pdf_base64_valido and pdf_data.pdf_valido:
