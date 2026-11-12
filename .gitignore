@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Dados sensíveis e artefatos gerados
+data/raw/*
+!data/raw/.gitkeep
+data/pdf/*
+!data/pdf/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+db/*.db
+db/*.db-journal
+db/*.db-wal
+reports/*.md
+reports/*.html
+!reports/.gitkeep
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

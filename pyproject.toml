@@ -1,0 +1,25 @@
+[project]
+name = "conferencia-acertos"
+version = "0.1.0"
+description = "Pipeline de extração, conferência unitária e homologação de payloads AgroCenter x MTech"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openpyxl>=3.1.5",
+    "pandas>=2.2.3",
+    "pdfplumber>=0.11.4",
+    "pydantic>=2.9.0",
+    "pypdf>=5.0.0",
+    "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/conferencia_acertos"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
