@@ -121,17 +121,43 @@ def generate_notebooklm_bundle(conn: sqlite3.Connection, nlm_dir: Path) -> Path:
         "\n".join(cat_lines), encoding="utf-8"
     )
 
+    # 3b. Fonte 06: Caso de Teste de Resiliência (PDF Corrompido / "QUALQUER ABOBRINHA")
+    resilience_md = """# Caso de Teste de Resiliência — Detecção de Payload Mock & PDF Corrompido
+
+## Objetivo da Demonstração
+Este documento comprova que o motor automatizado de conferência (AgroCenter × MTech) é capaz de **capturar falhas críticas de transporte e corrupção de binários** sem interromper o processamento dos demais lotes.
+
+## Payload Analisado: `2026-11-10 190742.014.txt`
+- **Identificação no JSON:** `Cod_Cliente = "0100095713"` | `Aviario = "QUALQUER ABOBRINHA"` | `Lote = "117"` | `Numero_Extrato = "565-117"`
+- **Natureza do Arquivo:** Payload de teste / mock sintético inserido na massa de homologação.
+
+## Erros Detectados Automaticamente pelo Motor
+1. **Base64 Truncado (Falha de Codificação):**
+   - O campo `PDF64` possui **234 caracteres** (`234 % 4 = 2`), sem o padding válido (`==`), gerando erro estrito no decoder: `Excess padding not allowed`.
+2. **Binário PDF Corrompido (Falha Estrutural):**
+   - Mesmo ignorando o padding, o binário decodificado possui apenas **174 bytes** (contra ~242 KB de um extrato real), sendo cortado abruptamente no objeto `3 0 obj <</Type /XObject /Subt...` e saltando direto para `startxref 237250 %%EOF` — sem páginas e sem tabela `xref` legível.
+
+## Como a Solução Reagiu (Prova de Eficácia)
+- **Resiliência do Pipeline:** O arquivo não quebrou a ingestão; foi registrado no SQLite (`pdf_valido = 0`, `pdf_paginas = 0`) e ganhou seu dossiê individual em `data/pdf/2026-11-10_190742.014/`.
+- **Captura nos Testes Unitários (`pytest`):** Reprovado imediatamente em `test_cardinalidade_um_para_um`, `test_pdf64_integro_e_legivel` e `test_batimento_agrocenter_vs_mtech`.
+- **Rastreabilidade:** Exposto na view `vw_divergencias` e no relatório executivo para auditoria.
+"""
+    (sources_dir / "06_caso_teste_resiliencia_pdf_corrompido.md").write_text(
+        resilience_md, encoding="utf-8"
+    )
+
     # 4. Prompts prontos para NotebookLM
     prompts_md = """# Prompts Prontos para NotebookLM — Homologação AgroCenter × MTech
 
 ## Como usar
 1. Crie um novo Notebook no **NotebookLM**.
-2. Faça upload dos 5 arquivos da pasta `reports/notebooklm/sources/`:
+2. Faça upload dos 6 arquivos da pasta `reports/notebooklm/sources/`:
    - `01_dossie_executivo_homologacao.md`
    - `02_catalogo_tecnico_issues_e_evidencias.md`
    - `03_dataset_conferencia.csv`
    - `04_dataset_divergencias.csv`
    - `05_dataset_duplicidades_lote.csv`
+   - `06_caso_teste_resiliencia_pdf_corrompido.md`
 3. Utilize os prompts abaixo no chat ou nas ferramentas de geração (Relatórios, Slides, Infográfico, Audio Overview).
 
 ---
@@ -197,6 +223,24 @@ Com base no catálogo técnico de issues e nos datasets CSV, gere um relatório 
 
 ```text
 Liste as 6 perguntas mais prováveis que gestores de negócio e líderes técnicos farão na reunião de homologação (ex: "Os valores pagos ao produtor estão errados?", "Por que apareceram 8 arquivos para o mesmo lote?", "O erro do BP bloqueia o pagamento?") e responda cada uma com base estrita nas evidências dos arquivos e datasets.
+```
+
+---
+
+## Prompt 6 — Infográfico: Prova de Eficácia do QA & Resiliência (Caso PDF Corrompido)
+
+```text
+Crie a estrutura visual de um infográfico em português (Brasil) destacando a eficácia da nossa suíte automatizada de QA na homologação AgroCenter × MTech, usando como destaque o caso de teste `2026-11-10 190742.014.txt` ("QUALQUER ABOBRINHA"):
+1. Título: "Como o Motor de QA Protege a Integração AgroCenter × MTech".
+2. Bloco "Teste de Fogo (Caso Simulado / Mock)":
+   - Entrada: Payload `565-117` ("QUALQUER ABOBRINHA") com `PDF64` truncado (234 chars Base64 / 174 bytes PDF).
+   - O que poderia acontecer sem QA: Arquivo corrompido passaria silenciosamente ou derrubaria o lote inteiro.
+   - O que nosso QA fez: Isolou o erro sem travar o pipeline, registrou no SQLite/DBeaver e reprovou automaticamente em 3 testes `pytest`.
+3. Bloco "Cobertura Completa de Detecção":
+   - Camada 1 (Contrato & Cardinalidade 1:1) -> Pegou `PDF64` truncado e `Demais_Dados` vazio.
+   - Camada 2 (Batimento JSON × PDF Cabeçalho × Quitação) -> Pegou divergência `Cod_Cliente` ≠ `BP`.
+   - Camada 3 (Idempotência & Hash Canônico) -> Pegou 8 reenvios de `1290-21` com ordenação não-determinística.
+4. Rodapé com resultado: 100% dos defeitos reais e simulados detectados com rastreabilidade completa.
 ```
 """
 
