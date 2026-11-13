@@ -5,7 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 
-from conferencia_acertos.parser import EXPECTED_SCHEMA, ParsedPayload
+from conferencia_acertos.parser import EXPECTED_SCHEMA, SUPPORTED_SCHEMAS, ParsedPayload
 from conferencia_acertos.pdf_extractor import PdfExtractedData
 
 
@@ -36,15 +36,33 @@ def _parse_iso_date(value: str | None) -> str | None:
         return None
 
 
-def _parse_pdf_date(value: str | None) -> str | None:
+def _parse_pdf_date(value: str | None, expected_iso: str | None = None) -> tuple[str | None, bool]:
+    """Interpreta DATA do PDF e indica se está em formato americano (MM/DD/YYYY)."""
     if not value:
-        return None
-    for fmt in ("%m/%d/%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(value, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
+        return None, False
+
+    br_iso: str | None = None
+    us_iso: str | None = None
+    try:
+        br_iso = datetime.strptime(value, "%d/%m/%Y").date().isoformat()
+    except ValueError:
+        pass
+    try:
+        us_iso = datetime.strptime(value, "%m/%d/%Y").date().isoformat()
+    except ValueError:
+        pass
+
+    if expected_iso:
+        if br_iso == expected_iso:
+            return br_iso, False
+        if us_iso == expected_iso:
+            return us_iso, True
+
+    if br_iso is not None:
+        return br_iso, False
+    if us_iso is not None:
+        return us_iso, True
+    return None, False
 
 
 def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list[ValidationResult]:
@@ -65,36 +83,45 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
         )
         return results
 
-    schema_ok = payload.schema_versao == EXPECTED_SCHEMA
+    schema_ok = payload.schema_versao in SUPPORTED_SCHEMAS
     results.append(
         ValidationResult(
             regra="SCHEMA_VERSAO",
             status="OK" if schema_ok else "FALHA",
             severidade="INFO" if schema_ok else "ALTA",
             valor_json=payload.schema_versao,
-            valor_pdf=EXPECTED_SCHEMA,
-            detalhe="Schema compatível" if schema_ok else f"Schema inesperado: esperado {EXPECTED_SCHEMA}",
+            valor_pdf=", ".join(sorted(SUPPORTED_SCHEMAS)),
+            detalhe=(
+                "Schema compatível"
+                if schema_ok
+                else f"Schema inesperado: esperado um de {sorted(SUPPORTED_SCHEMAS)}"
+            ),
         )
     )
 
-    # 2. Cardinalidade 1:1 (1 payload -> 1 item em Data -> 1 binário PDF válido)
+    # 2. Cardinalidade 1:1 por item (cada item em Data -> 1 binário PDF válido; lotes N >= 1 permitidos)
     pdf_ok = payload.pdf_base64_valido and pdf_data.pdf_valido
-    card_ok = payload.qtd_itens_data == 1 and pdf_ok
+    card_ok = payload.qtd_itens_data >= 1 and pdf_ok
+    if card_ok and payload.qtd_itens_data == 1:
+        card_detalhe = "Cardinalidade 1:1 confirmada (1 item em Data e 1 PDF íntegro)"
+    elif card_ok:
+        card_detalhe = (
+            f"Cardinalidade 1:1 por item confirmada "
+            f"(item {payload.item_indice}/{payload.qtd_itens_data} do lote com 1 PDF íntegro)"
+        )
+    else:
+        card_detalhe = (
+            f"Esperado 1:1 por item (>=1 item em Data e 1 PDF válido), obtido Data={payload.qtd_itens_data} "
+            f"e PDF={'válido' if pdf_ok else 'inválido'}"
+        )
     results.append(
         ValidationResult(
             regra="CARDINALIDADE_1_PARA_1",
             status="OK" if card_ok else "FALHA",
             severidade="INFO" if card_ok else "ALTA",
-            valor_json=f"{payload.qtd_itens_data} item(ns) em Data",
+            valor_json=f"{payload.item_indice}/{payload.qtd_itens_data} item(ns) em Data",
             valor_pdf="1 PDF válido" if pdf_ok else "0 PDF válido",
-            detalhe=(
-                "Cardinalidade 1:1 confirmada (1 item em Data e 1 PDF íntegro)"
-                if card_ok
-                else (
-                    f"Esperado 1:1 (1 item em Data e 1 PDF válido), obtido Data={payload.qtd_itens_data} "
-                    f"e PDF={'válido' if pdf_ok else 'inválido'}"
-                )
-            ),
+            detalhe=card_detalhe,
         )
     )
 
@@ -172,29 +199,44 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
 
     cod_cli = (payload.cod_cliente or "").strip()
     bp_pdf = (pdf_data.bp or "").strip()
-    if cod_cli and bp_pdf:
-        match_bp = cod_cli == bp_pdf
-        results.append(
-            ValidationResult(
-                regra="BATIMENTO_COD_CLIENTE_BP",
-                status="OK" if match_bp else "FALHA",
-                severidade="INFO" if match_bp else "ALTA",
-                valor_json=cod_cli,
-                valor_pdf=bp_pdf,
-                detalhe=(
-                    "Cod_Cliente igual ao BP do PDF"
-                    if match_bp
-                    else f"Divergência entre Cod_Cliente ({cod_cli}) no JSON e BP ({bp_pdf}) no PDF"
-                ),
-            )
+    match_bp = bool(cod_cli and bp_pdf and cod_cli == bp_pdf)
+    if not cod_cli or not bp_pdf:
+        bp_detalhe = (
+            "Risco LGPD: Cod_Cliente (JSON) ou BP (PDF) ausente, impedindo garantir entrega ao produtor correto"
         )
+    elif match_bp:
+        bp_detalhe = "Cod_Cliente rigorosamente igual ao BP do PDF"
+    else:
+        bp_detalhe = (
+            f"Risco LGPD: Divergência entre Cod_Cliente ({cod_cli}) no JSON e BP ({bp_pdf}) no PDF "
+            "— risco de disponibilizar acerto para outro produtor"
+        )
+    results.append(
+        ValidationResult(
+            regra="BATIMENTO_COD_CLIENTE_BP",
+            status="OK" if match_bp else "FALHA",
+            severidade="INFO" if match_bp else "ALTA",
+            valor_json=cod_cli or "Ausente",
+            valor_pdf=bp_pdf or "Ausente",
+            detalhe=bp_detalhe,
+        )
+    )
 
     # 6. Batimentos com Demais_Dados (quando presente)
     if dd is not None:
-        # Aviario (JSON) x Produtor (PDF)
+        # Aviario (JSON) x Produtor (PDF) ou Código do Aviário (PDF)
         aviario_norm = _normalize_text(dd.Aviario)
         produtor_norm = _normalize_text(pdf_data.produtor)
-        match_prod = bool(aviario_norm and produtor_norm and aviario_norm == produtor_norm)
+        aviario_cod_norm = _normalize_text(pdf_data.aviario_codigo or payload.extrato_aviario)
+        match_nome = bool(aviario_norm and produtor_norm and aviario_norm == produtor_norm)
+        match_cod = bool(aviario_norm and aviario_cod_norm and aviario_norm == aviario_cod_norm)
+        match_prod = match_nome or match_cod
+        if match_nome:
+            prod_detalhe = "Aviario (JSON) confere com PRODUTOR (PDF)"
+        elif match_cod:
+            prod_detalhe = "Aviario (JSON) confere com código do AVIÁRIO (PDF)"
+        else:
+            prod_detalhe = "Divergência entre Aviario (JSON) e PRODUTOR/AVIÁRIO (PDF)"
         results.append(
             ValidationResult(
                 regra="BATIMENTO_AVIARIO_PRODUTOR",
@@ -202,11 +244,7 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
                 severidade="INFO" if match_prod else "ALTA",
                 valor_json=dd.Aviario,
                 valor_pdf=pdf_data.produtor,
-                detalhe=(
-                    "Aviario (JSON) confere com PRODUTOR (PDF)"
-                    if match_prod
-                    else "Divergência entre Aviario (JSON) e PRODUTOR (PDF)"
-                ),
+                detalhe=prod_detalhe,
             )
         )
 
@@ -283,7 +321,7 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
 
         # DataEmissao
         iso_json = _parse_iso_date(dd.DataEmissao)
-        iso_pdf = _parse_pdf_date(pdf_data.data_pdf)
+        iso_pdf, data_pdf_eua = _parse_pdf_date(pdf_data.data_pdf, expected_iso=iso_json)
         match_data = bool(iso_json and iso_pdf and iso_json == iso_pdf)
         results.append(
             ValidationResult(
@@ -293,12 +331,24 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
                 valor_json=dd.DataEmissao,
                 valor_pdf=pdf_data.data_pdf,
                 detalhe=(
-                    f"Data confere ({iso_json}; PDF em formato MM/DD/YYYY)"
+                    f"Data confere ({iso_json})"
                     if match_data
                     else f"Divergência de data: JSON={iso_json} vs PDF={iso_pdf} ({pdf_data.data_pdf})"
                 ),
             )
         )
+
+        if match_data and data_pdf_eua:
+            results.append(
+                ValidationResult(
+                    regra="PDF_DATA_FORMATO_EUA",
+                    status="ALERTA",
+                    severidade="BAIXA",
+                    valor_json=dd.DataEmissao,
+                    valor_pdf=pdf_data.data_pdf,
+                    detalhe="Cabeçalho DATA do PDF exibido em formato americano (MM/DD/YYYY); recomendado DD/MM/YYYY para o produtor",
+                )
+            )
 
     # 7. Qualidade do template PDF (valor por extenso em inglês na declaração)
     if pdf_data.tem_valor_extenso_en:
@@ -310,6 +360,54 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
                 valor_json=None,
                 valor_pdf="Texto por extenso em inglês na declaração",
                 detalhe="Declaração de recebimento do PDF exibe valor por extenso em inglês (ex: 'Seventy-Three Thousand...')",
+            )
+        )
+
+    # 8. Consistência zootécnica e financeira interna do PDF antes de disponibilizar ao produtor
+    zoo_erros: list[str] = []
+    if pdf_data.aves_alojadas is not None and pdf_data.aves_abatidas is not None:
+        if pdf_data.aves_abatidas > pdf_data.aves_alojadas:
+            zoo_erros.append(
+                f"Aves Abatidas ({pdf_data.aves_abatidas}) > Aves Alojadas ({pdf_data.aves_alojadas})"
+            )
+    if pdf_data.mortalidade_pct is not None and pdf_data.viabilidade_pct is not None:
+        soma_pct = pdf_data.mortalidade_pct + pdf_data.viabilidade_pct
+        if abs(soma_pct - 100.0) > 0.5:
+            zoo_erros.append(
+                f"Mortalidade ({pdf_data.mortalidade_pct}%) + Viabilidade ({pdf_data.viabilidade_pct}%) = {soma_pct:.2f}% != 100%"
+            )
+    if (
+        pdf_data.aves_alojadas is not None
+        or pdf_data.mortalidade_pct is not None
+    ):
+        results.append(
+            ValidationResult(
+                regra="PDF_CONSISTENCIA_ZOOTECNICA",
+                status="OK" if not zoo_erros else "FALHA",
+                severidade="INFO" if not zoo_erros else "MEDIA",
+                valor_json=None,
+                valor_pdf=(
+                    f"Aloj={pdf_data.aves_alojadas}, Abat={pdf_data.aves_abatidas}, "
+                    f"Mort={pdf_data.mortalidade_pct}%, Viab={pdf_data.viabilidade_pct}%"
+                ),
+                detalhe="Indicadores zootécnicos consistentes no PDF" if not zoo_erros else "; ".join(zoo_erros),
+            )
+        )
+
+    if pdf_data.valor_lote is not None and pdf_data.valor_liquido is not None:
+        fin_ok = pdf_data.valor_liquido <= pdf_data.valor_lote
+        results.append(
+            ValidationResult(
+                regra="PDF_CONSISTENCIA_FINANCEIRA",
+                status="OK" if fin_ok else "FALHA",
+                severidade="INFO" if fin_ok else "MEDIA",
+                valor_json=None,
+                valor_pdf=f"Lote=R$ {pdf_data.valor_lote:.2f}, Liquido=R$ {pdf_data.valor_liquido:.2f}",
+                detalhe=(
+                    "Valores financeiros consistentes no PDF (Valor Líquido <= Valor do Lote)"
+                    if fin_ok
+                    else f"Valor Líquido ({pdf_data.valor_liquido:.2f}) maior que Valor do Lote ({pdf_data.valor_lote:.2f})"
+                ),
             )
         )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 import html
 import json
-import shutil
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,8 +15,6 @@ from conferencia_acertos.parser import ParsedPayload
 from conferencia_acertos.pdf_extractor import PdfExtractedData
 from conferencia_acertos.validator import ValidationResult
 
-# ... (rest of the file remains same, just adding shutil import)
-
 
 def _fmt(val: object, default: str = "-") -> str:
     if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
@@ -25,32 +23,48 @@ def _fmt(val: object, default: str = "-") -> str:
     return s if s else default
 
 
+def resolve_lote_key(payload: ParsedPayload, pdf_data: PdfExtractedData) -> str:
+    """Resolve a chave de pasta agnóstica ao arquivo de origem: <aviario-lote> ou fallback."""
+    raw_key = None
+    if payload.demais_dados and payload.demais_dados.Numero_Extrato:
+        raw_key = payload.demais_dados.Numero_Extrato.strip()
+    elif pdf_data.aviario_lote_composto_pdf:
+        raw_key = pdf_data.aviario_lote_composto_pdf.strip()
+    elif payload.extrato_aviario and payload.extrato_lote:
+        raw_key = f"{payload.extrato_aviario}-{payload.extrato_lote}"
+    else:
+        raw_key = f"sem_lote_{payload.sha256_arquivo[:8]}"
+
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", raw_key).strip("_")
+    return sanitized or f"sem_lote_{payload.sha256_arquivo[:8]}"
+
+
 def export_payload_bundle(
     bundle_dir: Path,
-    safe_stem: str,
+    lote_key: str,
     payload: ParsedPayload,
     pdf_data: PdfExtractedData,
     validations: list[ValidationResult],
 ) -> Path | None:
-    """Cria a subpasta data/pdf/<payload>/ com o PDF, payload.json e relatorio_acuracia.md."""
+    """Cria/atualiza por adição a subpasta data/pdf/<aviario-lote>/ com PDF(s), payload.json e relatorio_acuracia.md."""
     bundle_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copia arquivo de origem para auditoria
-    shutil.copy2(payload.caminho_origem, bundle_dir / payload.caminho_origem.name)
 
     pdf_saved_path: Path | None = None
     if payload.pdf_bytes and payload.pdf_base64_valido and pdf_data.pdf_valido:
-        pdf_saved_path = bundle_dir / f"{safe_stem}.pdf"
-        pdf_saved_path.write_bytes(payload.pdf_bytes)
+        pdf_hash8 = (pdf_data.pdf_bytes_sha256 or payload.sha256_arquivo)[:8]
+        pdf_saved_path = bundle_dir / f"{lote_key}_{pdf_hash8}.pdf"
+        if not pdf_saved_path.exists():
+            pdf_saved_path.write_bytes(payload.pdf_bytes)
 
-    payload_json_obj = {
+    ocorrencia_obj = {
         "arquivo_origem": payload.arquivo_origem,
+        "arquivo_pai": payload.caminho_origem.name,
         "sha256_arquivo": payload.sha256_arquivo,
         "schema_versao": payload.schema_versao,
         "cardinalidade": {
             "qtd_itens_data": payload.qtd_itens_data,
             "item_indice": payload.item_indice,
-            "esperado_1_para_1": payload.qtd_itens_data == 1 and pdf_saved_path is not None,
+            "esperado_1_para_1_por_item": payload.qtd_itens_data >= 1 and pdf_saved_path is not None,
         },
         "Cod_Cliente": payload.cod_cliente,
         "Demais_Dados_valido": payload.demais_dados_valido,
@@ -72,8 +86,31 @@ def export_payload_bundle(
             "erro": payload.pdf_base64_erro or pdf_data.pdf_erro,
         },
     }
-    (bundle_dir / "payload.json").write_text(
-        json.dumps(payload_json_obj, indent=2, ensure_ascii=False),
+
+    payload_json_path = bundle_dir / "payload.json"
+    ocorrencias: list[dict[str, object]] = []
+    if payload_json_path.exists():
+        try:
+            existing = json.loads(payload_json_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict) and isinstance(existing.get("ocorrencias"), list):
+                ocorrencias = [
+                    o for o in existing["ocorrencias"]
+                    if isinstance(o, dict) and o.get("arquivo_origem") != payload.arquivo_origem
+                ]
+        except Exception:
+            ocorrencias = []
+    ocorrencias.append(ocorrencia_obj)
+
+    payload_json_path.write_text(
+        json.dumps(
+            {
+                "aviario_lote": lote_key,
+                "qtd_ocorrencias": len(ocorrencias),
+                "ocorrencias": ocorrencias,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 
@@ -94,15 +131,16 @@ def export_payload_bundle(
         else "-"
     )
 
-    lines = [
-        f"# Relatório de Acurácia — `{payload.arquivo_origem}`",
+    section_lines = [
+        f"## Ocorrência #{len(ocorrencias)} — `{payload.arquivo_origem}`",
         "",
         f"- **Acurácia (Regras OK / Total):** **{acuracia_pct:.1f}%** ({ok_count}/{total_regras})",
         f"- **Falhas Bloqueantes:** {falha_count} | **Alertas:** {alerta_count}",
-        f"- **Cardinalidade (`Data` ↔ PDF):** {payload.qtd_itens_data} item(ns) em `Data` | PDF válido: {'Sim' if pdf_saved_path else 'Não'}",
+        f"- **Cardinalidade (`Data` ↔ PDF):** item {payload.item_indice}/{payload.qtd_itens_data} | PDF válido: {'Sim' if pdf_saved_path else 'Não'}",
         f"- **PDF Gerado:** `{pdf_saved_path.name if pdf_saved_path else 'Não gerado (PDF inválido/corrompido)'}`",
+        f"- **SHA-256 PDF:** `{pdf_data.pdf_bytes_sha256 or '-'}`",
         "",
-        "## Comparativo Chave (Payload JSON × Binário PDF)",
+        "### Comparativo Chave (Payload JSON × Binário PDF)",
         "",
         "| Campo | Payload JSON | PDF (Cabeçalho) | PDF (Quitação) |",
         "| :--- | :--- | :--- | :--- |",
@@ -111,17 +149,31 @@ def export_payload_bundle(
         f"| **Produtor / Aviário** | `{payload.demais_dados.Aviario if payload.demais_dados else '-'}` | `{pdf_data.produtor or '-'}` | `{pdf_data.produtor or '-'}` |",
         f"| **Data Emissão** | `{payload.demais_dados.DataEmissao if payload.demais_dados else '-'}` | `{pdf_data.data_pdf or '-'}` | `-` |",
         "",
-        "## Detalhamento das Regras Conferidas",
+        "### Detalhamento das Regras Conferidas",
         "",
         "| Regra | Status | Severidade | Valor JSON | Valor PDF | Detalhe |",
         "| :--- | :---: | :---: | :--- | :--- | :--- |",
     ]
     for v in validations:
-        lines.append(
+        section_lines.append(
             f"| `{v.regra}` | **{v.status}** | {v.severidade} | `{v.valor_json or '-'}` | `{v.valor_pdf or '-'}` | {v.detalhe} |"
         )
+    section_lines.append("")
 
-    (bundle_dir / "relatorio_acuracia.md").write_text("\n".join(lines), encoding="utf-8")
+    rel_path = bundle_dir / "relatorio_acuracia.md"
+    if len(ocorrencias) == 1 or not rel_path.exists():
+        header = [
+            f"# Relatório de Acurácia — Lote `{lote_key}`",
+            "",
+        ]
+        rel_path.write_text("\n".join(header + section_lines), encoding="utf-8")
+    else:
+        existing_md = rel_path.read_text(encoding="utf-8").rstrip()
+        rel_path.write_text(
+            existing_md + "\n\n---\n\n" + "\n".join(section_lines),
+            encoding="utf-8",
+        )
+
     return pdf_saved_path
 
 
@@ -131,7 +183,6 @@ def export_tabular(conn: sqlite3.Connection, exports_dir: Path) -> tuple[Path, P
 
     df_conf = pd.read_sql_query("SELECT * FROM vw_conferencia_completa ORDER BY arquivo_origem", conn)
     df_div = pd.read_sql_query("SELECT * FROM vw_divergencias", conn)
-    df_dup = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote", conn)
     df_dup = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote", conn)
 
     csv_conf_path = exports_dir / "conferencia_acertos.csv"
@@ -202,7 +253,9 @@ def generate_executive_report(conn: sqlite3.Connection, report_path: Path) -> Pa
         dd_ok = "OK" if row["demais_dados_valido"] == 1 else "FALHA"
         pdf_ok = "OK" if row["pdf_valido"] == 1 else "FALHA"
         qtd_data = int(row["qtd_itens_data"]) if not pd.isna(row["qtd_itens_data"]) else 0
-        card_str = f"{qtd_data}:{'1' if row['pdf_valido'] == 1 else '0'}"
+        item_idx = int(row["item_indice"]) if not pd.isna(row["item_indice"]) else 1
+        pdf_flag = "1" if row["pdf_valido"] == 1 else "0"
+        card_str = f"1:{pdf_flag}" if qtd_data == 1 else f"1:{pdf_flag} ({item_idx}/{qtd_data})"
         av_lote_cab = (
             f"{_fmt(row['pdf_aviario_codigo'])}-{_fmt(row['pdf_lote'])}"
             if _fmt(row["pdf_aviario_codigo"]) != "-"
@@ -226,13 +279,14 @@ def generate_executive_report(conn: sqlite3.Connection, report_path: Path) -> Pa
         "",
         "## 3. Análise de Duplicidades por Aviário-Lote (Idempotência e Hashes)",
         "",
-        "| Aviário-Lote | Qtd Payloads | Hashes Arquivo | Hashes PDF Binário | Hashes Conteúdo Canônico | Diagnóstico |",
-        "| :--- | :---: | :---: | :---: | :---: | :--- |",
+        "| Aviário-Lote | Qtd Payloads | IRNs Distintos | Hashes Arquivo | Hashes PDF Binário | Hashes Conteúdo Canônico | Diagnóstico |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :--- |",
     ])
 
     for _, drow in df_dup.iterrows():
         lines.append(
             f"| `{drow['aviario_lote']}` | {int(drow['qtd_payloads'])} | "
+            f"{int(drow['qtd_irns_distintos'])} | "
             f"{int(drow['qtd_hashes_arquivo_distintos'])} | "
             f"{int(drow['qtd_hashes_pdf_binario_distintos'])} | "
             f"{int(drow['qtd_hashes_conteudo_canonico_distintos'])} | "
@@ -247,20 +301,21 @@ def generate_executive_report(conn: sqlite3.Connection, report_path: Path) -> Pa
         "",
     ])
 
-    dups_only = df_dup[df_dup["qtd_payloads"] > 1]
+    dups_only = _filter_inconsistent_resends(df_dup)
     issue_num = 1
     if not dups_only.empty:
         for _, drow in dups_only.iterrows():
             lines.extend([
-                f"### Issue #{issue_num} — `DUPLICIDADE_E_ORDENACAO_NAO_DETERMINISTICA` (FALHA | Severidade: ALTA)",
+                f"### Issue #{issue_num} — `INCONSISTENCIA_IRN_OU_PDF64` (FALHA | Severidade: ALTA)",
                 "",
                 (
                     f"- **Descrição:** O aviário-lote `{drow['aviario_lote']}` recebeu **{int(drow['qtd_payloads'])}** "
-                    f"payloads distintos (hashes de arquivo: {int(drow['qtd_hashes_arquivo_distintos'])}, "
-                    f"hashes binários de PDF: {int(drow['qtd_hashes_pdf_binario_distintos'])}, "
+                    f"envio(s) com divergência de IRN ou hash binário do PDF Base64 "
+                    f"(IRNs distintos: {int(drow['qtd_irns_distintos'])}, hashes de arquivo: {int(drow['qtd_hashes_arquivo_distintos'])}, "
+                    f"hashes binários de PDF Base64: {int(drow['qtd_hashes_pdf_binario_distintos'])}, "
                     f"hashes de conteúdo canônico: {int(drow['qtd_hashes_conteudo_canonico_distintos'])}). "
-                    f"Diagnóstico: `{drow['diagnostico_duplicidade']}` — reenvio sem idempotência e/ou tabelas do PDF "
-                    f"(Movimentação de Ração / Produção Entregue) sem `ORDER BY` determinístico."
+                    f"Diagnóstico: `{drow['diagnostico_duplicidade']}` — reenvios do mesmo lote são aceitos, mas "
+                    f"exigem o mesmo IRN e o mesmo hash binário SHA-256 do PDF Base64."
                 ),
                 f"- **Payloads Afetados ({int(drow['qtd_payloads'])}):** {drow['arquivos']}",
                 "",
@@ -270,20 +325,20 @@ def generate_executive_report(conn: sqlite3.Connection, report_path: Path) -> Pa
     if df_div.empty and dups_only.empty:
         lines.append("Nenhuma divergência ou alerta identificado nos payloads analisados.")
     elif not df_div.empty:
-        grouped = df_div.groupby(["regra", "status", "severidade"], sort=False)
-        for (regra, status, severidade), grp in grouped:
-            arquivos = ", ".join(f"`{a}`" for a in grp["arquivo_origem"].tolist())
-            exemplo = grp.iloc[0]
+        for item in _build_issues_rows(df_div, pd.DataFrame(), split_by_pair=False):
             lines.extend([
-                f"### Issue #{issue_num} — `{regra}` ({status} | Severidade: {severidade})",
+                f"### Issue #{issue_num} — {item['Titulo']} ({item['Status']} | Severidade: {item['Severidade']})",
                 "",
-                f"- **Descrição:** {exemplo['detalhe']}",
-                f"- **Evidência JSON:** `{_fmt(exemplo['valor_json'])}`",
-                f"- **Evidência PDF:** `{_fmt(exemplo['valor_pdf'])}`",
-                f"- **Payloads Afetados ({len(grp)}):** {arquivos}",
+                f"- **Descrição:** {item['Descricao']}",
+                f"- **Evidência JSON:** `{item['Evidencia_JSON']}`",
+                f"- **Evidência PDF:** `{item['Evidencia_PDF']}`",
+                f"- **Lotes Afetados:** {item['Lotes_Afetados']}",
+                f"- **Payloads Afetados ({item['Qtd_Afetados']}):** {item['Payloads_Afetados']}",
                 "",
             ])
             issue_num += 1
+
+    _append_bp_diag_section(lines, conn, heading_level="###")
 
     lines.extend([
         "---",
@@ -301,54 +356,121 @@ def generate_executive_report(conn: sqlite3.Connection, report_path: Path) -> Pa
     return report_path
 
 
-def _build_issues_rows(df_div: pd.DataFrame, df_dup: pd.DataFrame) -> list[dict[str, object]]:
-    """Consolida divergências e duplicidades em registros estruturados para Jira/Azure DevOps."""
+def _filter_inconsistent_resends(df_dup: pd.DataFrame) -> pd.DataFrame:
+    """Filtra apenas lotes com IRN distinto (>1) ou hash binário de PDF64 distinto (>1)."""
+    if df_dup.empty:
+        return pd.DataFrame()
+    if "qtd_irns_distintos" in df_dup.columns and "qtd_hashes_pdf_binario_distintos" in df_dup.columns:
+        mask = (df_dup["qtd_irns_distintos"] > 1) | (df_dup["qtd_hashes_pdf_binario_distintos"] > 1)
+        return df_dup[mask]
+    if "possui_inconsistencia_irn_ou_pdf" in df_dup.columns:
+        return df_dup[df_dup["possui_inconsistencia_irn_ou_pdf"] == 1]
+    return pd.DataFrame()
+
+
+def _build_issues_rows(
+    df_div: pd.DataFrame,
+    df_dup: pd.DataFrame,
+    *,
+    split_by_pair: bool = False,
+) -> list[dict[str, object]]:
+    """Consolida divergências e inconsistências de IRN/PDF64 em registros estruturados para Jira/Azure DevOps."""
     rows: list[dict[str, object]] = []
     idx = 1
 
     sistema_map = {
-        "BATIMENTO_COD_CLIENTE_BP": "AgroCenter / MTech (Mapeamento BP vs Cod_Cliente)",
-        "DEMAIS_DADOS_INTEGRIDADE": "AgroCenter (Serialização Demais_Dados)",
-        "PDF_INTEGRIDADE": "MTech / Origem PDF64",
+        "BATIMENTO_COD_CLIENTE_BP": "AgroCenter / MTech (LGPD — Mapeamento BP vs Cod_Cliente)",
+        "DEMAIS_DADOS_INTEGRIDADE": "MTech -> AgroCenter (Serialização Demais_Dados)",
+        "PDF_INTEGRIDADE": "MTech (Geração/Codificação PDF64)",
         "PDF_VALOR_EXTENSO_IDIOMA": "MTech (Template PDF)",
+        "PDF_DATA_FORMATO_EUA": "MTech (Template PDF — Localização PT-BR)",
+        "PDF_CONSISTENCIA_ZOOTECNICA": "MTech (Cálculo Zootécnico PDF)",
+        "PDF_CONSISTENCIA_FINANCEIRA": "MTech (Cálculo Financeiro PDF)",
     }
 
-    dups_only = df_dup[df_dup["qtd_payloads"] > 1]
+    dups_only = _filter_inconsistent_resends(df_dup)
     for _, drow in dups_only.iterrows():
         rows.append({
             "ID": f"ISSUE-{idx:02d}",
-            "Titulo": f"[Integração] Reenvio duplicado e ordenação não-determinística no PDF ({drow['aviario_lote']})",
+            "Titulo": f"[Integração] Inconsistência entre envios do lote ({drow['aviario_lote']}): IRN ou hash binário PDF64 divergente",
             "Severidade": "ALTA",
-            "Sistema_Responsavel": "AgroCenter / MTech (Idempotência + Query PDF)",
+            "Sistema_Responsavel": "MTech / AgroCenter (Consistência IRN + Determinismo PDF64)",
             "Status": "FALHA",
             "Descricao": (
-                f"O aviário-lote {drow['aviario_lote']} recebeu {int(drow['qtd_payloads'])} payloads com "
-                f"{int(drow['qtd_hashes_pdf_binario_distintos'])} hashes binários de PDF distintos, mas "
-                f"{int(drow['qtd_hashes_conteudo_canonico_distintos'])} hash(es) de conteúdo canônico. "
-                f"Diagnóstico: {drow['diagnostico_duplicidade']}."
+                f"O aviário-lote {drow['aviario_lote']} recebeu {int(drow['qtd_payloads'])} envio(s) com "
+                f"{int(drow['qtd_irns_distintos'])} IRN(s) distintos e "
+                f"{int(drow['qtd_hashes_pdf_binario_distintos'])} hashes binários de PDF Base64 distintos "
+                f"({int(drow['qtd_hashes_conteudo_canonico_distintos'])} hash(es) de conteúdo canônico). "
+                f"Diagnóstico: {drow['diagnostico_duplicidade']}. Reenvios são aceitos quando mantêm o mesmo IRN e o mesmo SHA-256 binário do PDF64."
             ),
-            "Criterio_Aceite": "Garantir idempotência por IRN/aviário-lote e adicionar ORDER BY determinístico nas queries de Ração e Produção Entregue do PDF.",
+            "Criterio_Aceite": (
+                "Em qualquer reenvio de um mesmo aviário-lote, manter exatamente o mesmo IRN e o mesmo hash SHA-256 "
+                "binário do PDF Base64 (geração determinística)."
+            ),
             "Evidencia_JSON": f"qtd_payloads={int(drow['qtd_payloads'])}, hashes_arquivo={int(drow['qtd_hashes_arquivo_distintos'])}",
             "Evidencia_PDF": f"hashes_binario={int(drow['qtd_hashes_pdf_binario_distintos'])}, hash_canonico={int(drow['qtd_hashes_conteudo_canonico_distintos'])}",
+            "Lotes_Afetados": str(drow["aviario_lote"]),
             "Qtd_Afetados": int(drow["qtd_payloads"]),
             "Payloads_Afetados": drow["arquivos"],
         })
         idx += 1
 
     if not df_div.empty:
-        grouped = df_div.groupby(["regra", "status", "severidade"], sort=False)
-        for (regra, status, severidade), grp in grouped:
+        df_work = df_div.copy()
+        if "aviario_lote" not in df_work.columns:
+            df_work["aviario_lote"] = df_work["arquivo_origem"]
+        # Quando split_by_pair=True (ex.: CLI --group-by par), separa cada par distinto em BATIMENTO_*
+        df_work["_group_json"] = df_work.apply(
+            lambda r: _fmt(r["valor_json"]) if (split_by_pair and str(r["regra"]).startswith("BATIMENTO_")) else "*",
+            axis=1,
+        )
+        df_work["_group_pdf"] = df_work.apply(
+            lambda r: _fmt(r["valor_pdf"]) if (split_by_pair and str(r["regra"]).startswith("BATIMENTO_")) else "*",
+            axis=1,
+        )
+        grouped = df_work.groupby(["regra", "status", "severidade", "_group_json", "_group_pdf"], sort=False)
+        for (regra, status, severidade, _, _), grp in grouped:
             exemplo = grp.iloc[0]
+            lotes_unicos = sorted({str(x) for x in grp["aviario_lote"].tolist() if pd.notna(x)})
+            pares_unicos = sorted(
+                {(_fmt(r["valor_json"]), _fmt(r["valor_pdf"])) for _, r in grp.iterrows()}
+            )
+            if not split_by_pair and str(regra) == "BATIMENTO_COD_CLIENTE_BP" and len(pares_unicos) > 1:
+                pares_str = "; ".join(f"{vj} -> {vp}" for vj, vp in pares_unicos)
+                titulo = (
+                    f"[{regra}] Risco LGPD / Desalinhamento Cadastral: Divergência Cod_Cliente (JSON) x BP (PDF) "
+                    f"({len(pares_unicos)} pares em {len(grp)} ocorrências)"
+                )
+                descricao = (
+                    f"Consolidado de {len(pares_unicos)} pares distintos em {len(grp)} ocorrência(s): {pares_str}. "
+                    "Uma granja possui aviários com um Proprietário (BP) e um Responsável pela granja (também integrado, com BP). "
+                    "O PDF está puxando o BP do proprietário do aviário, enquanto o JSON (Cod_Cliente) está puxando o BP do "
+                    "responsável pela granja (além de possível redundância de cadastro no MTech). A coluna usada no JSON deve ser a mesma do PDF."
+                )
+                criterio = (
+                    "Alinhar a origem de Cod_Cliente (JSON) e BP (PDF) no MTech para utilizarem exatamente a mesma "
+                    "coluna/papel (Responsável da granja ou Proprietário do aviário) e garantir BATIMENTO_COD_CLIENTE_BP = OK em 100% dos payloads válidos."
+                )
+                evid_json = ", ".join(sorted({vj for vj, _ in pares_unicos}))
+                evid_pdf = ", ".join(sorted({vp for _, vp in pares_unicos}))
+            else:
+                titulo = f"[{regra}] {exemplo['detalhe'][:80]}"
+                descricao = exemplo["detalhe"]
+                criterio = f"Regra {regra} deve retornar OK em 100% dos payloads válidos."
+                evid_json = _fmt(exemplo["valor_json"])
+                evid_pdf = _fmt(exemplo["valor_pdf"])
+
             rows.append({
                 "ID": f"ISSUE-{idx:02d}",
-                "Titulo": f"[{regra}] {exemplo['detalhe'][:80]}",
+                "Titulo": titulo,
                 "Severidade": severidade,
                 "Sistema_Responsavel": sistema_map.get(regra, "AgroCenter / MTech"),
                 "Status": status,
-                "Descricao": exemplo["detalhe"],
-                "Criterio_Aceite": f"Regra {regra} deve retornar OK em 100% dos payloads válidos.",
-                "Evidencia_JSON": _fmt(exemplo["valor_json"]),
-                "Evidencia_PDF": _fmt(exemplo["valor_pdf"]),
+                "Descricao": descricao,
+                "Criterio_Aceite": criterio,
+                "Evidencia_JSON": evid_json,
+                "Evidencia_PDF": evid_pdf,
+                "Lotes_Afetados": ", ".join(lotes_unicos),
                 "Qtd_Afetados": len(grp),
                 "Payloads_Afetados": ", ".join(grp["arquivo_origem"].tolist()),
             })
@@ -357,13 +479,105 @@ def _build_issues_rows(df_div: pd.DataFrame, df_dup: pd.DataFrame) -> list[dict[
     return rows
 
 
+def query_issues(
+    conn: sqlite3.Connection,
+    *,
+    regra: str | None = None,
+    status: str | None = None,
+    severidade: str | None = None,
+    lote: str | None = None,
+    arquivo: str | None = None,
+    group_by: str = "par",
+) -> list[dict[str, object]]:
+    """Consulta e agrupa issues dinamicamente a partir do SQLite com filtros opcionais."""
+    df_div = pd.read_sql_query("SELECT * FROM vw_divergencias", conn)
+    df_dup = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote", conn)
+
+    if not df_div.empty:
+        if regra:
+            df_div = df_div[df_div["regra"].str.contains(regra, case=False, na=False)]
+        if status:
+            df_div = df_div[df_div["status"].str.upper() == status.upper()]
+        if severidade:
+            df_div = df_div[df_div["severidade"].str.upper() == severidade.upper()]
+        if lote:
+            df_div = df_div[df_div["aviario_lote"].astype(str).str.contains(lote, case=False, na=False)]
+        if arquivo:
+            mask = (
+                df_div["arquivo_origem"].astype(str).str.contains(arquivo, case=False, na=False)
+                | df_div["arquivo_pai"].astype(str).str.contains(arquivo, case=False, na=False)
+            )
+            df_div = df_div[mask]
+
+    if not df_dup.empty:
+        if lote:
+            df_dup = df_dup[df_dup["aviario_lote"].astype(str).str.contains(lote, case=False, na=False)]
+        if arquivo:
+            df_dup = df_dup[df_dup["arquivos"].astype(str).str.contains(arquivo, case=False, na=False)]
+        if status and status.upper() != "FALHA":
+            df_dup = df_dup.iloc[0:0]
+        if severidade and severidade.upper() != "ALTA":
+            df_dup = df_dup.iloc[0:0]
+        if regra and not any(k in regra.upper() for k in ("DUPLIC", "INCONSIST", "IRN", "PDF")):
+            df_dup = df_dup.iloc[0:0]
+
+    if group_by == "nenhum":
+        items: list[dict[str, object]] = []
+        for _, r in df_div.iterrows():
+            items.append({
+                "Regra": r["regra"],
+                "Status": r["status"],
+                "Severidade": r["severidade"],
+                "Aviario_Lote": r["aviario_lote"],
+                "Arquivo": r["arquivo_origem"],
+                "Valor_JSON": _fmt(r["valor_json"]),
+                "Valor_PDF": _fmt(r["valor_pdf"]),
+                "Detalhe": r["detalhe"],
+            })
+        return items
+
+    if group_by == "lote":
+        items = []
+        if not df_div.empty:
+            for lote_k, grp in df_div.groupby("aviario_lote", sort=True):
+                regras = sorted({str(x) for x in grp["regra"].tolist()})
+                items.append({
+                    "Aviario_Lote": lote_k,
+                    "Qtd_Ocorrencias": len(grp),
+                    "Regras": ", ".join(regras),
+                    "Severidade_Max": "ALTA" if "ALTA" in grp["severidade"].values else ("MEDIA" if "MEDIA" in grp["severidade"].values else "BAIXA"),
+                    "Payloads": ", ".join(sorted({str(x) for x in grp["arquivo_origem"].tolist()})),
+                })
+        return items
+
+    if group_by == "regra":
+        df_tmp = df_div.copy()
+        if not df_tmp.empty:
+            df_tmp["regra_orig"] = df_tmp["regra"]
+            grouped = df_tmp.groupby(["regra", "status", "severidade"], sort=False)
+            items = []
+            for (r_name, st, sev), grp in grouped:
+                lotes = sorted({str(x) for x in grp["aviario_lote"].tolist()})
+                items.append({
+                    "Regra": r_name,
+                    "Status": st,
+                    "Severidade": sev,
+                    "Qtd_Afetados": len(grp),
+                    "Lotes_Afetados": ", ".join(lotes),
+                })
+            return items
+        return []
+
+    return _build_issues_rows(df_div, df_dup, split_by_pair=(group_by == "par"))
+
+
 def generate_issues_package(conn: sqlite3.Connection, reports_dir: Path) -> tuple[Path, Path]:
     """Gera pacote de issues prontas para Jira/Azure DevOps (.csv e .md)."""
     reports_dir.mkdir(parents=True, exist_ok=True)
     df_div = pd.read_sql_query("SELECT * FROM vw_divergencias", conn)
     df_dup = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote", conn)
 
-    issues = _build_issues_rows(df_div, df_dup)
+    issues = _build_issues_rows(df_div, df_dup, split_by_pair=False)
     df_issues = pd.DataFrame(issues)
 
     csv_path = reports_dir / "issues_dev.csv"
@@ -387,28 +601,68 @@ def generate_issues_package(conn: sqlite3.Connection, reports_dir: Path) -> tupl
             f"- **Critério de Aceite:** {item['Criterio_Aceite']}",
             f"- **Evidência JSON:** `{item['Evidencia_JSON']}`",
             f"- **Evidência PDF:** `{item['Evidencia_PDF']}`",
+            f"- **Lotes Afetados:** {item.get('Lotes_Afetados', '-')}",
             f"- **Payloads Afetados ({item['Qtd_Afetados']}):** {item['Payloads_Afetados']}",
             "",
         ])
+
+    _append_bp_diag_section(md_lines, conn, heading_level="##")
 
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
     return csv_path, md_path
 
 
+def _append_bp_diag_section(
+    lines: list[str],
+    conn: sqlite3.Connection,
+    *,
+    heading_level: str = "##",
+) -> None:
+    """Anexa a tabela de diagnóstico cadastral Cod_Cliente (JSON) x BP (PDF) com consideração de domínio."""
+    try:
+        df_bp_diag = pd.read_sql_query("SELECT * FROM vw_diagnostico_cod_cliente_bp", conn)
+    except Exception:
+        df_bp_diag = pd.DataFrame()
+    if df_bp_diag.empty:
+        return
+
+    lines.extend([
+        f"{heading_level} Diagnóstico Cadastral: `Cod_Cliente` (JSON) × `BP` (PDF)",
+        "",
+        "Detalhamento dos pares divergentes cruzados com a base oficial de referência (`data/cod_bp/cod_BP_integracao.md` / `ref_aviario_bp`) para investigar redundância de cadastro no MTech ou desalinhamento entre a coluna do JSON e a coluna do PDF:",
+        "",
+        "> **Regra de Negócio (Granja × Aviário):** Uma granja possui aviários; cada aviário tem um **Proprietário** (`cod_BP_Proprietario`) e a granja tem um **Responsável** (`cod_BP_Responsavel`, também integrado). A coluna/papel utilizada no JSON (`Cod_Cliente`) deve ser exatamente a mesma do PDF (`BP`). No cruzamento com `cod_BP_integracao.md`, observou-se que o **JSON (`Cod_Cliente`)** está usando `cod_BP_Proprietario`, enquanto o **PDF (`BP`)** puxa `cod_BP_Responsavel` (ou diverge até da tabela de referência).",
+        "",
+        "| Aviário | Produtor (PDF) | Matrícula | Cod_Cliente (JSON) | BP (PDF) | Ref. Proprietário | Ref. Responsável | Classificação | Qtd | Lotes Afetados |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- |",
+    ])
+    for _, brow in df_bp_diag.iterrows():
+        ref_prop = f"{_fmt(brow.get('nome_proprietario_ref'))} (`{_fmt(brow.get('bp_proprietario_ref'))}`)"
+        ref_resp = f"{_fmt(brow.get('nome_responsavel_ref'))} (`{_fmt(brow.get('bp_responsavel_ref'))}`)"
+        lines.append(
+            f"| `{_fmt(brow.get('aviario'))}` | {_fmt(brow.get('produtor_pdf'))} | {_fmt(brow.get('matricula_pdf'))} | "
+            f"`{_fmt(brow.get('cod_cliente_json'))}` | `{_fmt(brow.get('bp_pdf'))}` | "
+            f"{ref_prop} | {ref_resp} | `{_fmt(brow.get('classificacao_causa'))}` | "
+            f"{int(brow.get('qtd_ocorrencias', 0))} | {_fmt(brow.get('lotes_afetados'))} |"
+        )
+    lines.append("")
+
+
 def generate_duplicity_diff_report(conn: sqlite3.Connection, report_path: Path) -> Path:
-    """Gera relatório com diff de texto entre os 2 primeiros PDFs de lotes duplicados."""
+    """Gera relatório com diff de texto entre os 2 primeiros PDFs de lotes com IRN ou PDF64 divergente."""
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    df_dup = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote WHERE qtd_payloads > 1", conn)
+    df_dup_all = pd.read_sql_query("SELECT * FROM vw_duplicidades_lote", conn)
+    df_dup = _filter_inconsistent_resends(df_dup_all)
 
     lines = [
-        "# Relatório de Diff — PDFs Duplicados por Aviário-Lote",
+        "# Relatório de Diff — Inconsistência de IRN ou Hash Binário PDF64 por Aviário-Lote",
         "",
-        "Este artefato evidencia as diferenças exatas de ordenação/conteúdo entre PDFs reenviados para o mesmo lote.",
+        "Este artefato evidencia diferenças entre envios do mesmo lote quando há IRN distinto ou hash binário de PDF Base64 distinto.",
         "",
     ]
 
     if df_dup.empty:
-        lines.append("Nenhuma duplicidade por aviário-lote encontrada.")
+        lines.append("Nenhuma inconsistência de IRN ou hash binário PDF64 encontrada entre envios.")
         report_path.write_text("\n".join(lines), encoding="utf-8")
         return report_path
 
@@ -429,9 +683,9 @@ def generate_duplicity_diff_report(conn: sqlite3.Connection, report_path: Path) 
         if len(sub) >= 2:
             r1, r2 = sub.iloc[0], sub.iloc[1]
             with pdfplumber.open(r1["pdf_caminho"]) as p1:
-                t1 = [ln for pg in p1.pages for ln in (pg.extract_text() or "").splitlines()]
+                t1 = [ln for pg in p1.pages for ln in (pg.extract_text(layout=True) or "").splitlines()]
             with pdfplumber.open(r2["pdf_caminho"]) as p2:
-                t2 = [ln for pg in p2.pages for ln in (pg.extract_text() or "").splitlines()]
+                t2 = [ln for pg in p2.pages for ln in (pg.extract_text(layout=True) or "").splitlines()]
             diff_lines = list(
                 difflib.unified_diff(
                     t1,
@@ -464,9 +718,10 @@ def generate_html_dashboard(conn: sqlite3.Connection, html_path: Path) -> Path:
 
     total = len(df_conf)
     aprovados = int((df_conf["status_homologacao"] == "APROVADO").sum()) if total else 0
+    aprovados_alerta = int((df_conf["status_homologacao"] == "APROVADO_COM_ALERTA").sum()) if total else 0
     reprovados = int((df_conf["status_homologacao"] == "REPROVADO").sum()) if total else 0
-    taxa = ((total - reprovados) / total * 100.0) if total else 0.0
-    dups_count = int((df_dup["qtd_payloads"] > 1).sum())
+    taxa = ((aprovados + aprovados_alerta) / total * 100.0) if total else 0.0
+    dups_count = len(_filter_inconsistent_resends(df_dup))
     parecer = "HOMOLOGADA" if total > 0 and reprovados == 0 else "NÃO HOMOLOGADA"
     parecer_cls = "ok" if parecer == "HOMOLOGADA" else "fail"
     now_str = datetime.now(timezone.utc).astimezone().strftime("%d/%m/%Y %H:%M:%S")
@@ -478,7 +733,9 @@ def generate_html_dashboard(conn: sqlite3.Connection, html_path: Path) -> Path:
         st = str(r["status_homologacao"])
         st_cls = "fail" if st == "REPROVADO" else ("warn" if "ALERTA" in st else "ok")
         qtd_d = int(r["qtd_itens_data"]) if not pd.isna(r["qtd_itens_data"]) else 0
-        card = f"{qtd_d}:{'1' if r['pdf_valido'] == 1 else '0'}"
+        idx_d = int(r["item_indice"]) if not pd.isna(r["item_indice"]) else 1
+        pdf_f = "1" if r["pdf_valido"] == 1 else "0"
+        card = f"1:{pdf_f}" if qtd_d == 1 else f"1:{pdf_f} ({idx_d}/{qtd_d})"
         av_cab = f"{_fmt(r['pdf_aviario_codigo'])}-{_fmt(r['pdf_lote'])}" if _fmt(r["pdf_aviario_codigo"]) != "-" else "-"
         av_quit = f"{_fmt(r['pdf_quitacao_aviario'])}-{_fmt(r['pdf_quitacao_lote'])}" if _fmt(r["pdf_quitacao_aviario"]) != "-" else "-"
         conf_rows_html.append(
@@ -498,7 +755,7 @@ def generate_html_dashboard(conn: sqlite3.Connection, html_path: Path) -> Path:
     dup_rows_html = []
     for _, d in df_dup.iterrows():
         diag = str(d["diagnostico_duplicidade"])
-        d_cls = "ok" if diag == "UNICO" else "fail"
+        d_cls = "ok" if diag in {"UNICO", "REENVIO_CONSISTENTE"} else "fail"
         dup_rows_html.append(
             f"<tr>"
             f"<td><code>{html.escape(str(d['aviario_lote']))}</code></td>"
@@ -594,6 +851,7 @@ def generate_html_dashboard(conn: sqlite3.Connection, html_path: Path) -> Path:
     <div class="filters">
       <button class="active" onclick="filterRows('ALL', this)">Todos ({total})</button>
       <button onclick="filterRows('REPROVADO', this)">Reprovados ({reprovados})</button>
+      <button onclick="filterRows('APROVADO_COM_ALERTA', this)">Com Alerta ({aprovados_alerta})</button>
       <button onclick="filterRows('APROVADO', this)">Aprovados ({aprovados})</button>
     </div>
     <table>

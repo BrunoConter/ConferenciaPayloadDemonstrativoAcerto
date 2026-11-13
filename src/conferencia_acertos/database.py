@@ -15,6 +15,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS payloads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     arquivo_origem TEXT NOT NULL UNIQUE,
+    arquivo_pai TEXT,
     sha256_arquivo TEXT NOT NULL,
     schema_versao TEXT,
     qtd_itens_data INTEGER NOT NULL DEFAULT 1,
@@ -91,6 +92,7 @@ CREATE VIEW vw_conferencia_completa AS
 SELECT
     p.id AS payload_id,
     p.arquivo_origem,
+    p.arquivo_pai,
     p.schema_versao,
     p.qtd_itens_data,
     p.item_indice,
@@ -151,6 +153,16 @@ DROP VIEW IF EXISTS vw_divergencias;
 CREATE VIEW vw_divergencias AS
 SELECT
     p.arquivo_origem,
+    p.arquivo_pai,
+    COALESCE(
+        NULLIF(j.numero_extrato, ''),
+        CASE
+            WHEN d.aviario_codigo IS NOT NULL AND d.lote_pdf IS NOT NULL
+            THEN d.aviario_codigo || '-' || d.lote_pdf
+            ELSE p.arquivo_origem
+        END
+    ) AS aviario_lote,
+    j.brim_grow_settlements_irn AS irn,
     v.regra,
     v.status,
     v.severidade,
@@ -159,10 +171,13 @@ SELECT
     v.detalhe
 FROM validacoes v
 JOIN payloads p ON p.id = v.payload_id
+LEFT JOIN acertos_json j ON j.payload_id = p.id
+LEFT JOIN acertos_pdf d ON d.payload_id = p.id
 WHERE v.status != 'OK'
 ORDER BY
     CASE v.status WHEN 'FALHA' THEN 1 WHEN 'ALERTA' THEN 2 ELSE 3 END,
     CASE v.severidade WHEN 'ALTA' THEN 1 WHEN 'MEDIA' THEN 2 WHEN 'BAIXA' THEN 3 ELSE 4 END,
+    aviario_lote,
     p.arquivo_origem;
 
 DROP VIEW IF EXISTS vw_duplicidades_lote;
@@ -194,23 +209,117 @@ SELECT
     COUNT(DISTINCT pdf_texto_canonico_sha256) AS qtd_hashes_conteudo_canonico_distintos,
     COUNT(DISTINCT brim_grow_settlements_irn) AS qtd_irns_distintos,
     CASE
+        WHEN COUNT(DISTINCT brim_grow_settlements_irn) > 1 OR COUNT(DISTINCT pdf_bytes_sha256) > 1 THEN 1
+        ELSE 0
+    END AS possui_inconsistencia_irn_ou_pdf,
+    CASE
         WHEN COUNT(*) = 1 THEN 'UNICO'
+        WHEN COUNT(DISTINCT brim_grow_settlements_irn) <= 1 AND COUNT(DISTINCT pdf_bytes_sha256) <= 1
+            THEN 'REENVIO_CONSISTENTE'
+        WHEN COUNT(DISTINCT brim_grow_settlements_irn) > 1 AND COUNT(DISTINCT pdf_bytes_sha256) <= 1
+            THEN 'INCONSISTENCIA_IRN_DIVERGENTE'
+        WHEN COUNT(DISTINCT brim_grow_settlements_irn) > 1 AND COUNT(DISTINCT pdf_bytes_sha256) > 1
+            THEN 'INCONSISTENCIA_IRN_E_PDF_DIVERGENTE'
         WHEN COUNT(DISTINCT pdf_texto_canonico_sha256) <= 1 AND COUNT(DISTINCT pdf_bytes_sha256) > 1
-            THEN 'REENVIO_CONTEUDO_IDENTICO_ORDEM_DIFERENTE'
-        WHEN COUNT(DISTINCT pdf_bytes_sha256) <= 1
-            THEN 'REENVIO_BINARIO_IDENTICO'
-        ELSE 'CONFLITO_CONTEUDO_DIVERGENTE'
+            THEN 'INCONSISTENCIA_PDF_NAO_DETERMINISTICO'
+        ELSE 'INCONSISTENCIA_CONTEUDO_DIVERGENTE'
     END AS diagnostico_duplicidade,
     GROUP_CONCAT(arquivo_origem, ', ') AS arquivos
 FROM base
 GROUP BY aviario_lote
 ORDER BY qtd_payloads DESC, aviario_lote;
+
+DROP VIEW IF EXISTS vw_diagnostico_cod_cliente_bp;
+CREATE TABLE IF NOT EXISTS ref_aviario_bp (
+    aviario TEXT PRIMARY KEY,
+    nome_proprietario_aviario TEXT,
+    cod_bp_proprietario TEXT,
+    nome_responsavel_granja TEXT,
+    cod_bp_responsavel TEXT
+);
+
+CREATE VIEW vw_diagnostico_cod_cliente_bp AS
+SELECT
+    COALESCE(NULLIF(j.extrato_aviario, ''), d.aviario_codigo) AS aviario,
+    p.cod_cliente AS cod_cliente_json,
+    d.bp AS bp_pdf,
+    d.matricula AS matricula_pdf,
+    MAX(d.produtor) AS produtor_pdf,
+    MAX(j.aviario) AS aviario_json,
+    MAX(r.nome_proprietario_aviario) AS nome_proprietario_ref,
+    MAX(r.cod_bp_proprietario) AS bp_proprietario_ref,
+    MAX(r.nome_responsavel_granja) AS nome_responsavel_ref,
+    MAX(r.cod_bp_responsavel) AS bp_responsavel_ref,
+    COUNT(*) AS qtd_ocorrencias,
+    GROUP_CONCAT(DISTINCT COALESCE(NULLIF(j.numero_extrato, ''), d.aviario_codigo || '-' || d.lote_pdf)) AS lotes_afetados,
+    (
+        SELECT GROUP_CONCAT(DISTINCT d2.produtor)
+        FROM payloads p2
+        JOIN acertos_pdf d2 ON d2.payload_id = p2.id
+        WHERE p2.cod_cliente = d.bp AND COALESCE(d2.produtor, '') != COALESCE(d.produtor, '')
+    ) AS titular_bp_na_base,
+    CASE
+        WHEN MAX(r.aviario) IS NOT NULL
+             AND p.cod_cliente = MAX(r.cod_bp_proprietario)
+             AND d.bp = MAX(r.cod_bp_responsavel)
+            THEN 'JSON=PROPRIETARIO | PDF=RESPONSAVEL'
+        WHEN MAX(r.aviario) IS NOT NULL
+             AND p.cod_cliente = MAX(r.cod_bp_proprietario)
+             AND d.bp != MAX(r.cod_bp_responsavel)
+            THEN 'JSON=PROPRIETARIO | PDF=DIVERGENTE_REF'
+        WHEN MAX(r.aviario) IS NOT NULL
+             AND p.cod_cliente = MAX(r.cod_bp_responsavel)
+             AND d.bp = MAX(r.cod_bp_proprietario)
+            THEN 'JSON=RESPONSAVEL | PDF=PROPRIETARIO'
+        WHEN EXISTS (
+            SELECT 1 FROM payloads p2
+            WHERE p2.cod_cliente = d.bp AND COALESCE(p2.cod_cliente, '') != COALESCE(p.cod_cliente, '')
+        ) THEN 'BP_COMPARTILHADO_OUTRO_PRODUTOR'
+        ELSE 'DIVERGENCIA_CADASTRAL_ISOLADA'
+    END AS classificacao_causa
+FROM payloads p
+JOIN acertos_json j ON j.payload_id = p.id
+JOIN acertos_pdf d ON d.payload_id = p.id
+LEFT JOIN ref_aviario_bp r ON r.aviario = COALESCE(NULLIF(j.extrato_aviario, ''), d.aviario_codigo)
+WHERE COALESCE(p.cod_cliente, '') != COALESCE(d.bp, '')
+GROUP BY COALESCE(NULLIF(j.extrato_aviario, ''), d.aviario_codigo), p.cod_cliente, d.bp, d.matricula
+ORDER BY qtd_ocorrencias DESC, produtor_pdf;
 """
+
+
+def upsert_ref_aviario_bp(conn: sqlite3.Connection, records: list[object]) -> int:
+    """Sincroniza a tabela de referência ref_aviario_bp com os registros extraídos."""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM ref_aviario_bp")
+    cur.executemany(
+        """
+        INSERT INTO ref_aviario_bp (
+            aviario, nome_proprietario_aviario, cod_bp_proprietario,
+            nome_responsavel_granja, cod_bp_responsavel
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                r.aviario,
+                r.nome_proprietario_aviario,
+                r.cod_bp_proprietario,
+                r.nome_responsavel_granja,
+                r.cod_bp_responsavel,
+            )
+            for r in records
+        ],
+    )
+    conn.commit()
+    return len(records)
 
 
 def _ensure_current_schema(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(payloads)").fetchall()}
-    if cols and ("qtd_itens_data" not in cols or "pdf_texto_canonico_sha256" not in cols):
+    if cols and (
+        "qtd_itens_data" not in cols
+        or "pdf_texto_canonico_sha256" not in cols
+        or "arquivo_pai" not in cols
+    ):
         conn.executescript(
             """
             PRAGMA foreign_keys = OFF;
@@ -252,13 +361,14 @@ def upsert_record(
     cur.execute(
         """
         INSERT INTO payloads (
-            arquivo_origem, sha256_arquivo, schema_versao, qtd_itens_data, item_indice,
+            arquivo_origem, arquivo_pai, sha256_arquivo, schema_versao, qtd_itens_data, item_indice,
             cod_cliente, pdf_valido, pdf_tamanho_bytes, pdf_paginas,
             pdf_bytes_sha256, pdf_texto_canonico_sha256, pdf_caminho, processado_em
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload.arquivo_origem,
+            payload.caminho_origem.name,
             payload.sha256_arquivo,
             payload.schema_versao,
             payload.qtd_itens_data,

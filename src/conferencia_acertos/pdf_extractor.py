@@ -60,7 +60,20 @@ def _parse_int(val: str | None) -> int | None:
 def _parse_float(val: str | None) -> float | None:
     if not val:
         return None
-    cleaned = val.replace(",", "").replace("R$", "").replace("%", "").strip()
+    cleaned = val.replace("R$", "").replace("%", "").strip()
+    if "," in cleaned and "." in cleaned:
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            # Padrão PT-BR: 73.500,00
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            # Padrão EN-US: 73,500.00
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        after_comma = cleaned.split(",")[-1]
+        if len(after_comma) <= 2:
+            cleaned = cleaned.replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
     try:
         return float(cleaned)
     except ValueError:
@@ -129,16 +142,16 @@ def extract_pdf_data(pdf_bytes: bytes | None) -> PdfExtractedData:
             texto_completo="",
         )
 
-    produtor = _search(r"PRODUTOR\s*-\s*(.+?)\s+MATR[ÍI]CULA\s*-", full_text)
-    matricula = _search(r"MATR[ÍI]CULA\s*-\s*(\S+)", full_text)
-    bps_encontrados = [b.strip() for b in re.findall(r"BP\s*-\s*(\S+)", full_text) if b.strip()]
+    produtor = _search(r"PRODUTOR\s*[-:]\s*(.+?)\s+MATR[ÍI]CULA\s*[-:]", full_text)
+    matricula = _search(r"MATR[ÍI]CULA\s*[-:]\s*(\S+)", full_text)
+    bps_encontrados = [b.strip() for b in re.findall(r"BP\s*[-:]\s*(\S+)", full_text) if b.strip()]
     bp = bps_encontrados[0] if bps_encontrados else None
-    municipio = _search(r"MUNIC[ÍI]PIO\s*-\s*(.+?)\s+UF\s*-", full_text)
-    uf = _search(r"UF\s*-\s*([A-Z]{2})\b", full_text)
-    data_pdf = _search(r"DATA\s*-\s*(\d{2}/\d{2}/\d{4})", full_text)
-    tecnico = _search(r"T[ÉE]CNICO\s*-\s*(.+?)\s+AVI[ÁA]RIO\s*-", full_text)
-    aviario_codigo = _search(r"AVI[ÁA]RIO\s*-\s*(\d+)", full_text)
-    lote_pdf = _search(r"LOTE\s*-\s*(\S+)", full_text)
+    municipio = _search(r"MUNIC[ÍI]PIO\s*[-:]\s*(.+?)\s+UF\s*[-:]", full_text)
+    uf = _search(r"UF\s*[-:]\s*([A-Z]{2})\b", full_text)
+    data_pdf = _search(r"DATA\s*[-:]\s*(\d{2}/\d{2}/\d{4})", full_text)
+    tecnico = _search(r"T[ÉE]CNICO\s*[-:]\s*(.+?)\s+AVI[ÁA]RIO\s*[-:]", full_text)
+    aviario_codigo = _search(r"AVI[ÁA]RIO\s*[-:]\s*([A-Za-z0-9]+)", full_text)
+    lote_pdf = _search(r"LOTE\s*[-:]\s*(\S+)", full_text)
 
     aviario_lote_composto_pdf = (
         f"{aviario_codigo}-{lote_pdf}" if aviario_codigo and lote_pdf else None
@@ -148,18 +161,18 @@ def extract_pdf_data(pdf_bytes: bytes | None) -> PdfExtractedData:
     if aviario_lote_composto_pdf and aviario_lote_composto_pdf in full_text:
         numero_extrato_pdf = aviario_lote_composto_pdf
     if not numero_extrato_pdf:
-        numero_extrato_pdf = _search(r"\n\s*(\d{3,}-\d+)\s+PAR[ÂA]METROS", full_text)
+        numero_extrato_pdf = _search(r"\n\s*([A-Za-z0-9]{2,}-\S+)\s+PAR[ÂA]METROS", full_text)
 
     quitacao_match = re.search(
-        r"lote[,\s]+(\S+?)[,\s]+do\s+avi[áa]rio\s+(\d+)",
+        r"lote[,\s]+(\S+?)[,\s]+do\s+avi[áa]rio\s+([A-Za-z0-9]+)",
         full_text,
         flags=re.IGNORECASE,
     )
     quitacao_lote = quitacao_match.group(1).strip() if quitacao_match else None
     quitacao_aviario = quitacao_match.group(2).strip() if quitacao_match else None
 
-    aves_alojadas = _parse_int(_search(r"Aves Alojadas\s+([\d,]+)", full_text))
-    aves_abatidas = _parse_int(_search(r"Aves Abatidas\s+([\d,]+)", full_text))
+    aves_alojadas = _parse_int(_search(r"Aves Alojadas\s+([\d.,]+)", full_text))
+    aves_abatidas = _parse_int(_search(r"Aves Abatidas\s+([\d.,]+)", full_text))
     mortalidade_pct = _parse_float(_search(r"Mortalidade\s+([\d.,]+)%", full_text))
     viabilidade_pct = _parse_float(_search(r"Viabilidade\s+([\d.,]+)%", full_text))
     conversao_alimentar = _parse_float(_search(r"Convers[ãa]o Alimentar Realizada\s+([\d.,]+)", full_text))
@@ -173,7 +186,12 @@ def extract_pdf_data(pdf_bytes: bytes | None) -> PdfExtractedData:
     valor_por_m2 = _parse_float(_search(r"VALOR POR M[²2]\s+R\$\s*([\d.,]+)", full_text))
 
     tem_valor_extenso_en = bool(
-        re.search(r"\((?:[A-Za-z-]+\s+)*(?:Thousand|Hundred|Million|And|Sixty|Seventy|Eighty|Ninety)", full_text)
+        re.search(
+            r"\((?:[A-Za-z-]+\s+)*(?:One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|"
+            r"Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|"
+            r"Twenty|Thirty|Forty|Fifty|Sixty|Seventy|Eighty|Ninety|Hundred|Thousand|Million|Dollars|Reais|Cents)\b",
+            full_text,
+        )
     )
 
     pdf_bytes_sha256 = hashlib.sha256(pdf_bytes).hexdigest()

@@ -1,0 +1,110 @@
+{
+  "pyproject.toml": {
+    "mtime": 1794595874.154028,
+    "seen": 1794596089.5046415,
+    "ast_hash": "afd825e7ef5662e3f2fab9576333abdb",
+    "semantic_hash": "afd825e7ef5662e3f2fab9576333abdb"
+  },
+  "src/conferencia_acertos/__init__.py": {
+    "mtime": 1794505546.153008,
+    "seen": 1794596089.504647,
+    "ast_hash": "386e413d9e33af0d9e370c61448ac403",
+    "semantic_hash": "386e413d9e33af0d9e370c61448ac403"
+  },
+  "src/conferencia_acertos/cli.py": {
+    "mtime": 1794603872.4334414,
+    "seen": 1794603938.2989273,
+    "ast_hash": "457473b6091fec429539ddf0b8d48001",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/database.py": {
+    "mtime": 1794603752.591825,
+    "seen": 1794603938.2989364,
+    "ast_hash": "6d4fe2efbc2e548e5e70745686f82486",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/exporter.py": {
+    "mtime": 1794603877.3334749,
+    "seen": 1794603938.2989416,
+    "ast_hash": "c010592626942b5958135fd62876693e",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/notebooklm_exporter.py": {
+    "mtime": 1794601895.2496004,
+    "seen": 1794601975.5761862,
+    "ast_hash": "06a6ccc6cb96c68adfc8a03cb1e6559a",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/parser.py": {
+    "mtime": 1794596989.2164404,
+    "seen": 1794597059.1134906,
+    "ast_hash": "5cb778a8c955418a57eb5f54b088bf7b",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/pdf_extractor.py": {
+    "mtime": 1794596992.2804902,
+    "seen": 1794597059.1134918,
+    "ast_hash": "af172d3db4cdde8e1af6af6572852c31",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/validator.py": {
+    "mtime": 1794599734.0950055,
+    "seen": 1794599914.932302,
+    "ast_hash": "d5e73f866755abcb026ddb2956c84f40",
+    "semantic_hash": ""
+  },
+  "tests/test_integracao_acertos.py": {
+    "mtime": 1794603895.6876051,
+    "seen": 1794603938.298965,
+    "ast_hash": "8d9707fd602dfa2644d71f4e3b32c2bb",
+    "semantic_hash": ""
+  },
+  ".agents/skills/conferencia-acertos/SKILL.md": {
+    "mtime": 1794597474.6176095,
+    "seen": 1794597481.6464338,
+    "ast_hash": "4f0e58de4e2d5de1c766623e63f4a519",
+    "semantic_hash": ""
+  },
+  "IDEA.md": {
+    "mtime": 1794603887.215544,
+    "seen": 1794603938.2989752,
+    "ast_hash": "da683227177e7525ebec900a73fe628e",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1794603883.0445144,
+    "seen": 1794603938.2989779,
+    "ast_hash": "cb89118a611244d7fd3169b43953921f",
+    "semantic_hash": ""
+  },
+  ".agents/skills/qa-analista-interfaces/SKILL.md": {
+    "mtime": 1794596838.6240325,
+    "seen": 1794597059.1134963,
+    "ast_hash": "4f028253b4281e0c2e2e32736a7a08c5",
+    "semantic_hash": ""
+  },
+  "docs/ARQUITETURA.md": {
+    "mtime": 1794603890.6575687,
+    "seen": 1794603938.2989829,
+    "ast_hash": "f599a4c34df52b78410ad4c195f66b2d",
+    "semantic_hash": ""
+  },
+  "docs/PLAYBOOK.md": {
+    "mtime": 1794597472.8255785,
+    "seen": 1794597481.646445,
+    "ast_hash": "6f8ecd3d1d6a21e88fe642164511ab79",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/reference_bp.py": {
+    "mtime": 1794603690.1972299,
+    "seen": 1794603938.298958,
+    "ast_hash": "a2b62c86dc8d548385857c4e1e9abf58",
+    "semantic_hash": ""
+  },
+  "data/cod_bp/cod_BP_integracao.md": {
+    "mtime": 1794603443.8396678,
+    "seen": 1794603938.2989795,
+    "ast_hash": "095779d9b17b519047ef04682db2f61f",
+    "semantic_hash": ""
+  }
+}

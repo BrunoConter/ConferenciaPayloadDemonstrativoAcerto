@@ -8,19 +8,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 
 EXPECTED_SCHEMA = "br.com.cvale.sap.extratoaves.v1"
+SUPPORTED_SCHEMAS = {EXPECTED_SCHEMA}
 
 
 class DemaisDadosModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     Cod_Empresa: int
     Lote: str
     DataEmissao: str
     Aviario: str
     Numero_Extrato: str
     BrimGrowSettlementsIRN: str
+
+    @field_validator("BrimGrowSettlementsIRN")
+    @classmethod
+    def _irn_nao_vazio(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("BrimGrowSettlementsIRN não pode ser vazio")
+        return cleaned
 
 
 @dataclass
@@ -57,7 +68,7 @@ def _compute_sha256(path: Path) -> str:
 def _split_numero_extrato(numero_extrato: str | None) -> tuple[str | None, str | None]:
     if not numero_extrato:
         return None, None
-    m = re.match(r"^\s*(\d+)\s*-\s*(\S+)\s*$", numero_extrato)
+    m = re.match(r"^\s*([A-Za-z0-9]+)\s*-\s*(\S+)\s*$", numero_extrato)
     if not m:
         return None, None
     return m.group(1).strip(), m.group(2).strip()
@@ -103,57 +114,77 @@ def _decode_pdf64(pdf64: Any) -> tuple[bool, str | None, bytes | None, int]:
     return True, None, raw_bytes, pdf64_len
 
 
-def parse_payload_file(path: Path) -> list[ParsedPayload]:
+def _error_payload(
+    *,
+    arquivo_origem: str,
+    caminho_origem: Path,
+    sha256: str,
+    json_erro: str,
+    schema_versao: str | None = None,
+    qtd_itens_data: int = 0,
+    item_indice: int = 0,
+    detail_erro: str = "JSON raiz inválido",
+) -> ParsedPayload:
+    return ParsedPayload(
+        arquivo_origem=arquivo_origem,
+        caminho_origem=caminho_origem,
+        sha256_arquivo=sha256,
+        json_valido=False,
+        json_erro=json_erro,
+        schema_versao=schema_versao,
+        qtd_itens_data=qtd_itens_data,
+        item_indice=item_indice,
+        cod_cliente=None,
+        demais_dados_valido=False,
+        demais_dados_erro=detail_erro,
+        demais_dados=None,
+        raw_demais_dados="",
+        extrato_aviario=None,
+        extrato_lote=None,
+        pdf_bytes=None,
+        pdf_base64_valido=False,
+        pdf_base64_erro=detail_erro,
+    )
+
+
+def _read_text_with_fallback(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
+
+
+def parse_payload_file(path: Path, root_dir: Path | None = None) -> list[ParsedPayload]:
     """Lê um arquivo de payload JSON e retorna uma lista de ParsedPayload (1 por item em Data)."""
     sha256 = _compute_sha256(path)
+    if root_dir is not None and path.parent != root_dir:
+        try:
+            display_name = path.relative_to(root_dir).as_posix()
+        except ValueError:
+            display_name = path.name
+    else:
+        display_name = path.name
+
     try:
-        content = path.read_text(encoding="utf-8")
+        content = _read_text_with_fallback(path)
         envelope = json.loads(content)
     except Exception as exc:
         return [
-            ParsedPayload(
-                arquivo_origem=path.name,
+            _error_payload(
+                arquivo_origem=display_name,
                 caminho_origem=path,
-                sha256_arquivo=sha256,
-                json_valido=False,
+                sha256=sha256,
                 json_erro=f"Falha ao ler JSON raiz: {exc}",
-                schema_versao=None,
-                qtd_itens_data=0,
-                item_indice=0,
-                cod_cliente=None,
-                demais_dados_valido=False,
-                demais_dados_erro="JSON raiz inválido",
-                demais_dados=None,
-                raw_demais_dados="",
-                extrato_aviario=None,
-                extrato_lote=None,
-                pdf_bytes=None,
-                pdf_base64_valido=False,
-                pdf_base64_erro="JSON raiz inválido",
             )
         ]
 
     if not isinstance(envelope, dict):
         return [
-            ParsedPayload(
-                arquivo_origem=path.name,
+            _error_payload(
+                arquivo_origem=display_name,
                 caminho_origem=path,
-                sha256_arquivo=sha256,
-                json_valido=False,
+                sha256=sha256,
                 json_erro="JSON raiz não é um objeto dict",
-                schema_versao=None,
-                qtd_itens_data=0,
-                item_indice=0,
-                cod_cliente=None,
-                demais_dados_valido=False,
-                demais_dados_erro="JSON raiz inválido",
-                demais_dados=None,
-                raw_demais_dados="",
-                extrato_aviario=None,
-                extrato_lote=None,
-                pdf_bytes=None,
-                pdf_base64_valido=False,
-                pdf_base64_erro="JSON raiz inválido",
             )
         ]
 
@@ -161,53 +192,32 @@ def parse_payload_file(path: Path) -> list[ParsedPayload]:
     data_list = envelope.get("Data")
     if not isinstance(data_list, list) or not data_list:
         return [
-            ParsedPayload(
-                arquivo_origem=path.name,
+            _error_payload(
+                arquivo_origem=display_name,
                 caminho_origem=path,
-                sha256_arquivo=sha256,
-                json_valido=False,
+                sha256=sha256,
                 json_erro="Campo 'Data' ausente, não é lista ou está vazio",
                 schema_versao=schema_versao,
                 qtd_itens_data=0 if not isinstance(data_list, list) else len(data_list),
-                item_indice=0,
-                cod_cliente=None,
-                demais_dados_valido=False,
-                demais_dados_erro="Campo 'Data' vazio",
-                demais_dados=None,
-                raw_demais_dados="",
-                extrato_aviario=None,
-                extrato_lote=None,
-                pdf_bytes=None,
-                pdf_base64_valido=False,
-                pdf_base64_erro="Campo 'Data' vazio",
+                detail_erro="Campo 'Data' vazio",
             )
         ]
 
     qtd_itens = len(data_list)
     results: list[ParsedPayload] = []
     for idx, item in enumerate(data_list):
-        nome_registro = path.name if qtd_itens == 1 else f"{path.name}[{idx}]"
+        nome_registro = display_name if qtd_itens == 1 else f"{display_name}[{idx}]"
         if not isinstance(item, dict):
             results.append(
-                ParsedPayload(
+                _error_payload(
                     arquivo_origem=nome_registro,
                     caminho_origem=path,
-                    sha256_arquivo=sha256,
-                    json_valido=False,
+                    sha256=sha256,
                     json_erro=f"Item Data[{idx}] não é um objeto",
                     schema_versao=schema_versao,
                     qtd_itens_data=qtd_itens,
                     item_indice=idx + 1,
-                    cod_cliente=None,
-                    demais_dados_valido=False,
-                    demais_dados_erro="Item inválido",
-                    demais_dados=None,
-                    raw_demais_dados="",
-                    extrato_aviario=None,
-                    extrato_lote=None,
-                    pdf_bytes=None,
-                    pdf_base64_valido=False,
-                    pdf_base64_erro="Item inválido",
+                    detail_erro="Item inválido",
                 )
             )
             continue

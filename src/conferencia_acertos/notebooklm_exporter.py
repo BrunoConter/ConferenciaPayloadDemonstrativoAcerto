@@ -27,7 +27,11 @@ def generate_notebooklm_bundle(conn: sqlite3.Connection, nlm_dir: Path) -> Path:
     aprovados = int((df_conf["status_homologacao"] == "APROVADO").sum()) if total else 0
     reprovados = int((df_conf["status_homologacao"] == "REPROVADO").sum()) if total else 0
     taxa = ((total - reprovados) / total * 100.0) if total else 0.0
-    dups_lotes = int((df_dup["qtd_payloads"] > 1).sum())
+    dups_lotes = (
+        int(((df_dup["qtd_irns_distintos"] > 1) | (df_dup["qtd_hashes_pdf_binario_distintos"] > 1)).sum())
+        if not df_dup.empty
+        else 0
+    )
     now_str = datetime.now(timezone.utc).astimezone().strftime("%d/%m/%Y %H:%M:%S")
     issues = _build_issues_rows(df_div, df_dup)
 
@@ -52,23 +56,19 @@ def generate_notebooklm_bundle(conn: sqlite3.Connection, nlm_dir: Path) -> Path:
         f"- **Payloads Aprovados sem Falhas:** {aprovados}",
         f"- **Payloads Reprovados (com falhas bloqueantes):** {reprovados}",
         f"- **Taxa de Conformidade Geral:** {taxa:.1f}%",
-        f"- **Lotes com Reenvio Duplicado:** {dups_lotes}",
+        f"- **Lotes com Inconsistência de IRN ou Hash PDF64:** {dups_lotes}",
         f"- **Total de Issues Mapeadas para Desenvolvimento:** {len(issues)}",
         "",
-        "## 3. Principais Achados da Auditoria",
+        "## 3. Principais Achados da Auditoria (Dinâmico)",
         "",
-        "1. **Batimento de Lote Composto (`aviario-lote`):** Nos PDFs legíveis do Lote `21`, o identificador composto "
-        "`1290-21` bateu 100% entre `Demais_Dados.Numero_Extrato`, o cabeçalho da página 1 (`AVIÁRIO - 1290` / `LOTE - 21`) "
-        "e o Termo de Quitação na última página (`lote, 21 do aviário 1290`).",
-        "2. **Divergência `Cod_Cliente` vs `BP`:** Em todos os 8 payloads do lote `1290-21`, o JSON informa `Cod_Cliente = 0100034342`, "
-        "enquanto o PDF exibe `BP = 0100093258` em todas as páginas.",
-        "3. **Duplicidade e Ordenação Não-Determinística:** O lote `1290-21` foi recebido **8 vezes** com 8 hashes de arquivo e "
-        "8 hashes binários de PDF diferentes, mas **apenas 1 hash canônico de conteúdo**. A análise de diff comprovou que os valores "
-        "totais são idênticos, porém as tabelas de *Movimentação de Ração* e *Produção Entregue* saem em ordens diferentes a cada geração.",
-        "4. **Falhas Estruturais Pontuais:** 1 payload veio com `Demais_Dados` vazio (`''`) e 1 payload de teste (`565-117` / `QUALQUER ABOBRINHA`) "
-        "veio com `PDF64` corrompido.",
-        "5. **Qualidade do Template PDF:** A declaração de recebimento na última página exibe o valor por extenso em **inglês** "
-        "(`Seventy-Three Thousand, One Hundred Ninety-Seven And Sixty-One`) dentro de um documento em português.",
+        *(
+            ["- Nenhuma falha ou alerta identificado na amostra atual."]
+            if not issues
+            else [
+                f"- **{it['ID']} ({it['Severidade']} | {it['Status']}):** {it['Descricao']} *(Afetados: {it['Qtd_Afetados']})*"
+                for it in issues
+            ]
+        ),
         "",
         "## 4. Resumo por Aviário-Lote",
         "",

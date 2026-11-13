@@ -1,13 +1,23 @@
-dentro da pasta /assets/Acerto há alguns payloads de banco, formato json.
+# IDEA & Evolução do Projeto
 
-eu preciso extrair as informações destes arquivos e organizar isso em uma base organizada, desejo usar o DBeaver para consultar e poder extrair depois em .csv ou .xlsx
+## Visão Original
 
-eu tenho dentro desses payloads binarios pdf BASE64, desejo conferir se as informações estao vindo corretas, isso é um teste unitario sobre integrações entre dois sistemas (AgroCenter e MTech)
+> *Requisitos iniciais levantados para o projeto:*
+> - Extrair informações dos payloads JSON de banco (`br.com.cvale.sap.extratoaves.v1`) e organizar em uma base estruturada para consulta no **DBeaver** e exportação em `.csv` / `.xlsx`.
+> - Decodificar os binários **PDF Base64** (`PDF64`) e conferir se as informações estão corretas por meio de **testes unitários** sobre a integração **MTech → AgroCenter → Produtor**.
+> - Criar **skills** para apoiar a rotina contínua de conferência quando novos arquivos forem adicionados em `data/raw/`.
+> - Gerar **relatório executivo** e pacote de **issues** para demonstrar aos stakeholders o status de homologação da solução.
 
-Crie algumas skills para que possam nos ajudar nessa tarefa, eu devo trazer mais arquivos e salvar na pasta /data me ajude a organizar as pastas deste arquivo
+---
 
-crie o .gitignore
+## Como a Ideia Evoluiu
 
-instale as libs python necessárias para a conferencia desses dados
+A solução evoluiu de um simples extrator para uma **plataforma completa de QA e Auditoria de Interoperabilidade**:
 
-Goal, relatorio executivo para nos ajudar a mostrar para os stakeholders que a soluçao está homologada
+1. **Rigor LGPD no Roteamento ao Produtor:** `Cod_Cliente` (JSON) e `BP` (PDF) são validados de forma obrigatória e estrita em todas as páginas, bloqueando qualquer risco de entrega indevida de extrato a outro produtor. Na regra de negócio **Granja × Aviário**, o proprietário do aviário (`cod_BP_Proprietario`) e o responsável pela granja (`cod_BP_Responsavel`) podem ser BPs distintos (mapeados em `data/cod_bp/cod_BP_integracao.md` / tabela `ref_aviario_bp`), exigindo que JSON e PDF utilizem exatamente o mesmo papel/coluna.
+2. **Idempotência & Determinismo Binário (Blockchain-ready):** além de comparar o hash do arquivo e do texto canônico, o pipeline audita a unicidade de `BrimGrowSettlementsIRN` e do hash SHA-256 binário do PDF por lote composto (`aviario-lote`).
+3. **Resiliência a Novos Payloads:** suporte a subpastas em `data/raw/`, encodings `utf-8-sig`/`latin-1`, campos extras em `Demais_Dados`, números em padrão PT-BR e EN-US, e códigos de aviário alfanuméricos.
+4. **Observabilidade e Governança:**
+   - Banco SQLite (`db/acertos.db`) sincronizado automaticamente com `data/raw/`.
+   - Dashboard HTML interativo, pacote de issues (`issues_dev.md/.csv`), diff de duplicidades e bundle pronto para **NotebookLM**.
+   - Agentes locais especializados (`.agents/skills/conferencia-acertos` e `.agents/skills/qa-analista-interfaces`) + grafo de código com `graphifyy`.

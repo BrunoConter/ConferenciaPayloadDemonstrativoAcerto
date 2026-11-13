@@ -1,0 +1,98 @@
+{
+  "pyproject.toml": {
+    "mtime": 1794595874.154028,
+    "seen": 1794596089.5046415,
+    "ast_hash": "afd825e7ef5662e3f2fab9576333abdb",
+    "semantic_hash": "afd825e7ef5662e3f2fab9576333abdb"
+  },
+  "src/conferencia_acertos/__init__.py": {
+    "mtime": 1794505546.153008,
+    "seen": 1794596089.504647,
+    "ast_hash": "386e413d9e33af0d9e370c61448ac403",
+    "semantic_hash": "386e413d9e33af0d9e370c61448ac403"
+  },
+  "src/conferencia_acertos/cli.py": {
+    "mtime": 1794600832.8066447,
+    "seen": 1794600870.5721302,
+    "ast_hash": "116266776e74db32d193bcdf7a1b650b",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/database.py": {
+    "mtime": 1794601883.2361622,
+    "seen": 1794601975.5761812,
+    "ast_hash": "5b640262a6006b9a84ff0d716ff38b5b",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/exporter.py": {
+    "mtime": 1794602733.9379663,
+    "seen": 1794603350.6633513,
+    "ast_hash": "c9c100dc5108ce0bda9a96bbd42807d4",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/notebooklm_exporter.py": {
+    "mtime": 1794601895.2496004,
+    "seen": 1794601975.5761862,
+    "ast_hash": "06a6ccc6cb96c68adfc8a03cb1e6559a",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/parser.py": {
+    "mtime": 1794596989.2164404,
+    "seen": 1794597059.1134906,
+    "ast_hash": "5cb778a8c955418a57eb5f54b088bf7b",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/pdf_extractor.py": {
+    "mtime": 1794596992.2804902,
+    "seen": 1794597059.1134918,
+    "ast_hash": "af172d3db4cdde8e1af6af6572852c31",
+    "semantic_hash": ""
+  },
+  "src/conferencia_acertos/validator.py": {
+    "mtime": 1794599734.0950055,
+    "seen": 1794599914.932302,
+    "ast_hash": "d5e73f866755abcb026ddb2956c84f40",
+    "semantic_hash": ""
+  },
+  "tests/test_integracao_acertos.py": {
+    "mtime": 1794603311.8096554,
+    "seen": 1794603350.6633582,
+    "ast_hash": "f188000eed062d7e37b5690f8b53b1d2",
+    "semantic_hash": ""
+  },
+  ".agents/skills/conferencia-acertos/SKILL.md": {
+    "mtime": 1794597474.6176095,
+    "seen": 1794597481.6464338,
+    "ast_hash": "4f0e58de4e2d5de1c766623e63f4a519",
+    "semantic_hash": ""
+  },
+  "IDEA.md": {
+    "mtime": 1794597468.9525118,
+    "seen": 1794597481.6464386,
+    "ast_hash": "8a3375625d59c8f9920afe0fd6e56ae7",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1794597467.474486,
+    "seen": 1794597481.646441,
+    "ast_hash": "7818f51c9bdd50d3f0842a89552d82ef",
+    "semantic_hash": ""
+  },
+  ".agents/skills/qa-analista-interfaces/SKILL.md": {
+    "mtime": 1794596838.6240325,
+    "seen": 1794597059.1134963,
+    "ast_hash": "4f028253b4281e0c2e2e32736a7a08c5",
+    "semantic_hash": ""
+  },
+  "docs/ARQUITETURA.md": {
+    "mtime": 1794597471.2385511,
+    "seen": 1794597481.6464434,
+    "ast_hash": "1b9b44b149ba45b53299ce0363342d46",
+    "semantic_hash": ""
+  },
+  "docs/PLAYBOOK.md": {
+    "mtime": 1794597472.8255785,
+    "seen": 1794597481.646445,
+    "ast_hash": "6f8ecd3d1d6a21e88fe642164511ab79",
+    "semantic_hash": ""
+  }
+}
