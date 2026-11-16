@@ -363,6 +363,19 @@ def validate_payload(payload: ParsedPayload, pdf_data: PdfExtractedData) -> list
             )
         )
 
+    # 7b. Qualidade do template PDF (sexagem em inglês)
+    if pdf_data.tem_sexagem_en:
+        results.append(
+            ValidationResult(
+                regra="PDF_SEXAGEM_IDIOMA",
+                status="ALERTA",
+                severidade="BAIXA",
+                valor_json=None,
+                valor_pdf="Straight Run",
+                detalhe="Campo Sexagem do PDF exibido em inglês ('Straight Run'); recomendado termo em português (ex: 'Misto')",
+            )
+        )
+
     # 8. Consistência zootécnica e financeira interna do PDF antes de disponibilizar ao produtor
     zoo_erros: list[str] = []
     if pdf_data.aves_alojadas is not None and pdf_data.aves_abatidas is not None:

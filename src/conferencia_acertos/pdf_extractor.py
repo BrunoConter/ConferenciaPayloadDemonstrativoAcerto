@@ -45,6 +45,7 @@ class PdfExtractedData:
     valor_liquido: float | None = None
     valor_por_m2: float | None = None
     tem_valor_extenso_en: bool = False
+    tem_sexagem_en: bool = False
 
 
 def _parse_int(val: str | None) -> int | None:
@@ -193,6 +194,7 @@ def extract_pdf_data(pdf_bytes: bytes | None) -> PdfExtractedData:
             full_text,
         )
     )
+    tem_sexagem_en = bool(re.search(r"\bStraight\s+Run\b", full_text, re.IGNORECASE))
 
     pdf_bytes_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
     pdf_texto_sha256 = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
@@ -233,4 +235,5 @@ def extract_pdf_data(pdf_bytes: bytes | None) -> PdfExtractedData:
         valor_liquido=valor_liquido,
         valor_por_m2=valor_por_m2,
         tem_valor_extenso_en=tem_valor_extenso_en,
+        tem_sexagem_en=tem_sexagem_en,
     )

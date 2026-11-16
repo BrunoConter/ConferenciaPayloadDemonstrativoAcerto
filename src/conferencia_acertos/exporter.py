@@ -383,6 +383,7 @@ def _build_issues_rows(
         "DEMAIS_DADOS_INTEGRIDADE": "MTech -> AgroCenter (Serialização Demais_Dados)",
         "PDF_INTEGRIDADE": "MTech (Geração/Codificação PDF64)",
         "PDF_VALOR_EXTENSO_IDIOMA": "MTech (Template PDF)",
+        "PDF_SEXAGEM_IDIOMA": "MTech (Template PDF — Localização PT-BR)",
         "PDF_DATA_FORMATO_EUA": "MTech (Template PDF — Localização PT-BR)",
         "PDF_CONSISTENCIA_ZOOTECNICA": "MTech (Cálculo Zootécnico PDF)",
         "PDF_CONSISTENCIA_FINANCEIRA": "MTech (Cálculo Financeiro PDF)",

@@ -134,6 +134,7 @@ def _build_synthetic_valid_pair() -> tuple[ParsedPayload, PdfExtractedData]:
         quitacao_aviario="1290",
         quitacao_lote="21",
         tem_valor_extenso_en=False,
+        tem_sexagem_en=False,
     )
     return payload, pdf_data
 
@@ -180,6 +181,17 @@ def test_data_pdf_formato_eua_gera_alerta() -> None:
     alerta = next(r for r in results if r.regra == "PDF_DATA_FORMATO_EUA")
     assert bat.status == "OK"
     assert alerta.status == "ALERTA"
+
+
+def test_sexagem_em_ingles_gera_alerta() -> None:
+    """Garante que Sexagem em inglês ('Straight Run') gera ALERTA de localização."""
+    payload, pdf_data = _build_synthetic_valid_pair()
+    pdf_data.tem_sexagem_en = True
+    results = validate_payload(payload, pdf_data)
+    alerta = next(r for r in results if r.regra == "PDF_SEXAGEM_IDIOMA")
+    assert alerta.status == "ALERTA"
+    assert alerta.severidade == "BAIXA"
+    assert alerta.valor_pdf == "Straight Run"
 
 
 def test_consistencia_zootecnica_e_financeira() -> None:
