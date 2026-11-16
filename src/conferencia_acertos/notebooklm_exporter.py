@@ -151,13 +151,14 @@ Este documento comprova que o motor automatizado de conferência (AgroCenter × 
 
 ## Como usar
 1. Crie um novo Notebook no **NotebookLM**.
-2. Faça upload dos 6 arquivos da pasta `reports/notebooklm/sources/`:
+2. Faça upload dos 7 arquivos da pasta `reports/notebooklm/sources/`:
    - `01_dossie_executivo_homologacao.md`
    - `02_catalogo_tecnico_issues_e_evidencias.md`
    - `03_dataset_conferencia.csv`
    - `04_dataset_divergencias.csv`
    - `05_dataset_duplicidades_lote.csv`
    - `06_caso_teste_resiliencia_pdf_corrompido.md`
+   - `07_log_execucoes_interface_e_recepcao_13_11.md`
 3. Utilize os prompts abaixo no chat ou nas ferramentas de geração (Relatórios, Slides, Infográfico, Audio Overview).
 
 ---
@@ -169,11 +170,11 @@ Atue como um Gerente de QA e Homologação apresentando o status da integração
 Com base exclusivamente nas fontes enviadas, crie o roteiro completo de uma apresentação de 8 slides em português (Brasil):
 - Slide 1: Título, objetivo da integração e parecer atual (NÃO HOMOLOGADA / pendente de correções).
 - Slide 2: Visão geral da arquitetura (JSON + Demais_Dados + PDF64) e regra de cardinalidade 1:1.
-- Slide 3: KPIs da amostra auditada (9 payloads, taxa de conformidade, lotes analisados).
-- Slide 4: O que já está funcionando bem (batimento de aviário-lote 1290-21 entre JSON, cabeçalho e Termo de Quitação, e integridade dos totais financeiros).
-- Slide 5: Achado Crítico #1 — Divergência entre Cod_Cliente (0100034342) e BP (0100093258).
-- Slide 6: Achado Crítico #2 — Duplicidade de envios (8x para 1290-21) e ordenação não-determinística no PDF (mesmo conteúdo canônico, hashes diferentes).
-- Slide 7: Achados Pontuais — Demais_Dados vazio, PDF64 corrompido e texto por extenso em inglês na quitação.
+- Slide 3: KPIs da amostra auditada (47 payloads, 40 lotes únicos, 63,8% de conformidade geral, 17 payloads reprovados) e cobertura das execuções de 13/11 (40/40 lotes recebidos na interface manual vs. Status 200 sem entrega na interface automatizada das 16:18).
+- Slide 4: O que já está funcionando bem (batimento dos 40 aviários-lote entre JSON, cabeçalho e Termo de Quitação, e integridade dos totais financeiros).
+- Slide 5: Achado Crítico #1 — Divergência entre Cod_Cliente e BP (7 pares distintos em 17 ocorrências: Proprietário do Aviário no PDF vs. Responsável pela Granja no JSON).
+- Slide 6: Achado Crítico #2 — Duplicidade de envios (8x para 1290-21 com 1 IRN e 1 hash canônico, mas 8 hashes binários de PDF distintos).
+- Slide 7: Achados Pontuais e Infraestrutura — Data em formato americano (MM/DD/YYYY), valor por extenso em inglês na quitação e execução automatizada das 16:18 com Status 200 não recebida no endpoint.
 - Slide 8: Plano de Ação, donos por sistema (AgroCenter vs MTech) e critérios objetivos para aprovar o Go-Live.
 Para cada slide, inclua: Título, 3 a 4 bullet points diretos, destaque visual/dado-chave e nota do apresentador.
 ```
@@ -184,13 +185,13 @@ Para cada slide, inclua: Título, 3 a 4 bullet points diretos, destaque visual/d
 
 ```text
 Crie a especificação estruturada de um infográfico em português (Brasil) resumindo a auditoria de homologação AgroCenter × MTech:
-1. Cabeçalho com o status "NÃO HOMOLOGADA" e os 4 KPIs principais (9 payloads, 8 duplicados no lote 1290-21, 1 hash canônico de conteúdo, 5 issues abertas).
-2. Fluxograma visual da conferência (Payload JSON -> Validação 1:1 -> Decode PDF64 -> Batimento Cabeçalho + Quitação -> Banco SQLite/DBeaver).
+1. Cabeçalho com o status "NÃO HOMOLOGADA" e os 4 KPIs principais (47 payloads / 40 lotes únicos, 63,8% conformidade, 17 reprovados por divergência de BP, 4 issues mapeadas).
+2. Fluxograma visual da conferência (Interface MTech -> Endpoint AgroCenter data/raw/ -> Validação 1:1 -> Decode PDF64 -> Batimento Cabeçalho + Quitação -> Banco SQLite/DBeaver).
 3. Semáforo de Conformidade:
-   - Verde (OK): Aviário-Lote composto (1290-21), Produtor, Datas e Totais Financeiros.
-   - Amarelo (Alerta): Valor por extenso em inglês no Termo de Quitação.
-   - Vermelho (Bloqueante): Cod_Cliente ≠ BP, Reenvio sem idempotência + PDF sem ORDER BY, Demais_Dados vazio e PDF64 corrompido.
-4. Callout explicando de forma simples "Por que 8 arquivos iguais têm hashes diferentes?".
+   - Verde (OK): 40/40 lotes compostos recebidos em 13/11, Produtor e Totais Financeiros consistentes.
+   - Amarelo (Alerta): Data em formato americano (MM/DD/YYYY) e valor por extenso em inglês no Termo de Quitação.
+   - Vermelho (Bloqueante): Cod_Cliente ≠ BP (7 pares / 17 ocorrências), 8 PDFs não-determinísticos para o lote 1290-21 e execução automatizada das 16:18 com Status 200 não recebida no endpoint.
+4. Callout explicando de forma simples "Por que 8 arquivos do lote 1290-21 têm hashes binários diferentes mesmo com o mesmo conteúdo?".
 ```
 
 ---
@@ -200,10 +201,10 @@ Crie a especificação estruturada de um infográfico em português (Brasil) res
 ```text
 Foque nos resultados da homologação da integração AgroCenter × MTech em português (Brasil).
 Explique de forma clara e executiva:
-- Por que a integração ainda não pode ser homologada apesar dos valores financeiros e do aviário-lote (1290-21) estarem corretos nos PDFs legíveis.
-- A descoberta técnica sobre os 8 reenvios do lote 1290-21 com hashes diferentes (falta de idempotência + ordenação aleatória nas tabelas de Ração e Produção Entregue).
-- A divergência de cadastro entre Cod_Cliente e BP, além dos casos de Demais_Dados vazio e valor por extenso em inglês.
-- Quais são os próximos passos para liberar a homologação.
+- Por que a integração ainda não pode ser homologada apesar dos 40 lotes testados em 13/11 terem sido recebidos com valores financeiros e aviário-lote corretos.
+- A descoberta técnica sobre a divergência de cadastro entre Cod_Cliente (Responsável pela Granja) e BP (Proprietário do Aviário) em 7 pares distintos (17 ocorrências).
+- Os 8 reenvios do lote 1290-21 com hashes binários diferentes (PDF não-determinístico com mesmo conteúdo canônico).
+- O alerta de infraestrutura da execução automatizada das 16:18 (Status 200 sem entrega no endpoint) e os próximos passos para liberar a homologação.
 ```
 
 ---
@@ -211,10 +212,11 @@ Explique de forma clara e executiva:
 ## Prompt 4 — Relatório Técnico e Plano de Correção para Dev
 
 ```text
-Com base no catálogo técnico de issues e nos datasets CSV, gere um relatório objetivo para o Tech Lead contendo:
+Com base no catálogo técnico de issues, nos datasets CSV e no log de execuções de 13/11, gere um relatório objetivo para o Tech Lead contendo:
 1. Tabela priorizada de Issues (ID, Severidade, Sistema Responsável, Causa Raiz Provável, Evidência Exata e Critério de Aceite).
-2. Explicação técnica da causa dos hashes diferentes no lote 1290-21 usando os trechos de diff entre os PDFs.
-3. Checklist de validação que o time de desenvolvimento deve atender antes de enviar novos payloads para reteste na suíte pytest.
+2. Explicação técnica da causa dos hashes diferentes no lote 1290-21 e da diferença entre Proprietário do Aviário e Responsável pela Granja nos 7 pares de BP.
+3. Investigação recomendada para a interface automatizada `Export BRIM Demons Resultado Frango Res V3` (Status 200 às 16:18 sem recepção no endpoint).
+4. Checklist de validação que o time de desenvolvimento deve atender antes de enviar novos payloads para reteste na suíte pytest.
 ```
 
 ---
@@ -222,7 +224,7 @@ Com base no catálogo técnico de issues e nos datasets CSV, gere um relatório 
 ## Prompt 5 — Q&A / Perguntas Difíceis de Stakeholders
 
 ```text
-Liste as 6 perguntas mais prováveis que gestores de negócio e líderes técnicos farão na reunião de homologação (ex: "Os valores pagos ao produtor estão errados?", "Por que apareceram 8 arquivos para o mesmo lote?", "O erro do BP bloqueia o pagamento?") e responda cada uma com base estrita nas evidências dos arquivos e datasets.
+Liste as 6 perguntas mais prováveis que gestores de negócio e líderes técnicos farão na reunião de homologação (ex: "Os valores pagos ao produtor estão errados?", "Todos os 40 lotes de 13/11 chegaram?", "O erro de BP entre Proprietário e Responsável bloqueia o pagamento?", "Por que a execução automatizada das 16:18 deu Status 200 mas não chegou?") e responda cada uma com base estrita nas evidências dos arquivos e datasets.
 ```
 
 ---
@@ -230,17 +232,17 @@ Liste as 6 perguntas mais prováveis que gestores de negócio e líderes técnic
 ## Prompt 6 — Infográfico: Prova de Eficácia do QA & Resiliência (Caso PDF Corrompido)
 
 ```text
-Crie a estrutura visual de um infográfico em português (Brasil) destacando a eficácia da nossa suíte automatizada de QA na homologação AgroCenter × MTech, usando como destaque o caso de teste `2026-11-10 190742.014.txt` ("QUALQUER ABOBRINHA"):
+Crie a estrutura visual de um infográfico em português (Brasil) destacando a eficácia da nossa suíte automatizada de QA na homologação AgroCenter × MTech, usando como destaque o caso de teste simulado `2026-11-10 190742.014.txt` ("QUALQUER ABOBRINHA") e o lote de 40 payloads de 13/11:
 1. Título: "Como o Motor de QA Protege a Integração AgroCenter × MTech".
 2. Bloco "Teste de Fogo (Caso Simulado / Mock)":
    - Entrada: Payload `565-117` ("QUALQUER ABOBRINHA") com `PDF64` truncado (234 chars Base64 / 174 bytes PDF).
    - O que poderia acontecer sem QA: Arquivo corrompido passaria silenciosamente ou derrubaria o lote inteiro.
-   - O que nosso QA fez: Isolou o erro sem travar o pipeline, registrou no SQLite/DBeaver e reprovou automaticamente em 3 testes `pytest`.
+   - O que nosso QA fez: Isolou o erro sem travar o pipeline, registrou no SQLite/DBeaver e reprovou automaticamente na suíte `pytest`.
 3. Bloco "Cobertura Completa de Detecção":
-   - Camada 1 (Contrato & Cardinalidade 1:1) -> Pegou `PDF64` truncado e `Demais_Dados` vazio.
-   - Camada 2 (Batimento JSON × PDF Cabeçalho × Quitação) -> Pegou divergência `Cod_Cliente` ≠ `BP`.
-   - Camada 3 (Idempotência & Hash Canônico) -> Pegou 8 reenvios de `1290-21` com ordenação não-determinística.
-4. Rodapé com resultado: 100% dos defeitos reais e simulados detectados com rastreabilidade completa.
+   - Camada 1 (Contrato & Cardinalidade 1:1) -> Detecta `PDF64` truncado e `Demais_Dados` vazio.
+   - Camada 2 (Batimento JSON × PDF Cabeçalho × Quitação × `ref_aviario_bp`) -> Detectou os 7 pares de divergência `Cod_Cliente` ≠ `BP`.
+   - Camada 3 (Idempotência & Hash Canônico) -> Detectou 8 reenvios de `1290-21` com PDF não-determinístico.
+4. Rodapé com resultado: 40/40 lotes de 13/11 reconciliados e 100% dos defeitos detectados com rastreabilidade completa.
 ```
 """
 
